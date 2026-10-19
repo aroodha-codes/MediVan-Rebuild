@@ -1,0 +1,18 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime output/logs
+output/
+logs/
+*.log
+
+# IDE
+.vscode/
+
+# Generated datasets and calibration values (do not ignore the shipped Q-table)
+*.npz
+/calibration/*.npy
+/calibration/calibration_meta.txt

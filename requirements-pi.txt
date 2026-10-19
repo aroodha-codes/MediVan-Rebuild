@@ -1,0 +1,5 @@
+# Raspberry Pi hardware runtime dependencies.
+# Install cv2, NumPy, Picamera2/libcamera, gpiozero and Matplotlib using apt;
+# see PI_DEPLOYMENT.md. A system-site-packages venv is required to see Picamera2.
+pygame-ce>=2.5.0
+smbus2>=0.4.3

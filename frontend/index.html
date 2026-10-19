@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediVan — Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+
+<!-- ══ VITALS STRIP: the signature element. A patient-monitor style ══
+     ══ continuous trace of the robot's live telemetry.            ══ -->
+<header class="vitals" id="vitals">
+  <div class="vitals__id">
+    <span class="vitals__unit">MEDIVAN&nbsp;01</span>
+    <span class="vitals__link" id="linkState">LINK<i></i></span>
+  </div>
+  <canvas class="vitals__trace" id="vitalsTrace" aria-hidden="true"></canvas>
+  <dl class="vitals__readout">
+    <div><dt>Battery</dt><dd id="vBattery">—</dd></div>
+    <div><dt>Voltage</dt><dd id="vVoltage">—</dd></div>
+    <div><dt>Current</dt><dd id="vCurrent">—</dd></div>
+    <div><dt>Power</dt><dd id="vPower">—</dd></div>
+    <div><dt>Batt state</dt><dd id="vBattState">—</dd></div>
+    <div><dt>Coverage</dt><dd id="vCoverage">—</dd></div>
+    <div><dt>Speed</dt><dd id="vSpeed">—</dd></div>
+    <div><dt>State</dt><dd id="vState" class="is-wide">—</dd></div>
+  </dl>
+</header>
+
+<div class="shell">
+
+  <!-- ══ NAVIGATION RAIL ══ -->
+  <nav class="rail" aria-label="Sections">
+    <a class="rail__item is-active" href="#/dashboard" data-page="dashboard">
+      <span class="rail__glyph">▤</span><span class="rail__label">Overview</span></a>
+    <a class="rail__item" href="#/missions" data-page="missions">
+      <span class="rail__glyph">≡</span><span class="rail__label">Deliveries</span>
+      <span class="rail__badge" id="navQueueCount">0</span></a>
+    <a class="rail__item" href="#/map" data-page="map">
+      <span class="rail__glyph">◈</span><span class="rail__label">Live map</span></a>
+    <a class="rail__item" href="#/camera" data-page="camera">
+      <span class="rail__glyph">◉</span><span class="rail__label">Camera</span></a>
+    <a class="rail__item" href="#/analytics" data-page="analytics">
+      <span class="rail__glyph">◹</span><span class="rail__label">Analytics</span></a>
+    <a class="rail__item" href="#/settings" data-page="settings">
+      <span class="rail__glyph">⚙</span><span class="rail__label">Settings</span></a>
+  </nav>
+
+  <main class="stage" id="stage">
+
+    <!-- ═══════════════ 1. OVERVIEW ═══════════════ -->
+    <section class="page is-active" data-page="dashboard">
+      <div class="page__head">
+        <h1>Overview</h1>
+        <p class="page__sub">Ward logistics vehicle, floor 2 east wing.</p>
+      </div>
+
+      <div class="grid grid--stats">
+        <article class="card stat" id="statMode">
+          <span class="stat__label">Mission state</span>
+          <strong class="stat__value" id="sMode">—</strong>
+          <span class="stat__foot" id="sTask">Waiting for telemetry</span>
+        </article>
+        <article class="card stat">
+          <span class="stat__label">Battery</span>
+          <strong class="stat__value" id="sBattery">—</strong>
+          <div class="meter"><i id="sBatteryBar" style="width:0%"></i></div>
+        </article>
+        <article class="card stat">
+          <span class="stat__label">Map coverage</span>
+          <strong class="stat__value" id="sCoverage">—</strong>
+          <div class="meter meter--teal"><i id="sCoverageBar" style="width:0%"></i></div>
+        </article>
+        <article class="card stat">
+          <span class="stat__label">Deliveries today</span>
+          <strong class="stat__value" id="sDeliveries">—</strong>
+          <span class="stat__foot" id="sPending">—</span>
+        </article>
+      </div>
+
+      <div class="grid grid--split">
+        <article class="card">
+          <h2 class="card__title">Position &amp; localisation</h2>
+          <dl class="readout">
+            <div><dt>Position</dt><dd id="sPos">—</dd></div>
+            <div><dt>Heading</dt><dd id="sHeading">—</dd></div>
+            <div><dt>Velocity</dt><dd id="sVel">—</dd></div>
+            <div><dt>Localisation confidence</dt><dd id="sConf">—</dd></div>
+            <div><dt>Estimated drift</dt><dd id="sDrift" class="is-warn">—</dd></div>
+          </dl>
+          <p class="note">Drift grows with distance travelled. The vehicle
+             re-references its position at the dock.</p>
+        </article>
+
+        <article class="card">
+          <h2 class="card__title">Compute</h2>
+          <dl class="readout">
+            <div><dt>Control loop</dt><dd id="sFps">—</dd></div>
+            <div><dt>CPU</dt><dd id="sCpu">—</dd></div>
+            <div><dt>Memory</dt><dd id="sRam">—</dd></div>
+            <div><dt>Planner</dt><dd id="sPlan">—</dd></div>
+            <div><dt>Uptime</dt><dd id="sUptime">—</dd></div>
+          </dl>
+        </article>
+      </div>
+
+      <article class="card">
+        <h2 class="card__title">Activity</h2>
+        <ol class="feed" id="feed"><li class="feed__empty">No events yet.</li></ol>
+      </article>
+    </section>
+
+    <!-- ═══════════════ 2. DELIVERIES ═══════════════ -->
+    <section class="page" data-page="missions">
+      <div class="page__head">
+        <h1>Deliveries</h1>
+        <p class="page__sub">Queued in priority order. The vehicle takes the top item next.</p>
+      </div>
+
+      <article class="card">
+        <h2 class="card__title">Add a delivery</h2>
+        <form class="form" id="missionForm">
+          <div class="field">
+            <label for="mDest">Destination</label>
+            <select id="mDest">
+              <option value="ward-a">Ward A — Recovery</option>
+              <option value="ward-b">Ward B — Paediatrics</option>
+              <option value="ward-c">Ward C — Isolation</option>
+              <option value="theatre">Theatre 3</option>
+              <option value="pharmacy">Pharmacy store</option>
+              <option value="path-lab">Pathology lab</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="mItem">Payload</label>
+            <input id="mItem" type="text" placeholder="e.g. IV antibiotics, 2 trays" maxlength="60">
+          </div>
+          <div class="field">
+            <label for="mPriority">Priority</label>
+            <select id="mPriority">
+              <option value="0">Routine</option>
+              <option value="1">Urgent</option>
+              <option value="2">Emergency — jump the queue</option>
+            </select>
+          </div>
+          <button class="btn btn--primary" type="submit">Add to queue</button>
+        </form>
+      </article>
+
+      <article class="card">
+        <div class="card__bar">
+          <h2 class="card__title">Queue</h2>
+          <span class="tag" id="queueCount">0 waiting</span>
+        </div>
+        <ul class="queue" id="queue"></ul>
+      </article>
+    </section>
+
+    <!-- ═══════════════ 3. LIVE MAP ═══════════════ -->
+    <section class="page" data-page="map">
+      <div class="page__head">
+        <h1>Live map</h1>
+        <p class="page__sub">Occupancy grid built by the vehicle as it explores.</p>
+      </div>
+      <article class="card card--flush">
+        <div class="mapwrap">
+          <canvas id="mapCanvas" width="800" height="600"></canvas>
+          <ul class="legend">
+            <li><i class="sw sw--free"></i>Explored floor</li>
+            <li><i class="sw sw--wall"></i>Wall</li>
+            <li><i class="sw sw--unknown"></i>Not yet mapped</li>
+            <li><i class="sw sw--path"></i>Planned route</li>
+            <li><i class="sw sw--robot"></i>Vehicle</li>
+            <li><i class="sw sw--dock"></i>Dock</li>
+          </ul>
+        </div>
+        <div class="maptools">
+          <label class="switch"><input type="checkbox" id="tgPath" checked><span>Route</span></label>
+          <label class="switch"><input type="checkbox" id="tgFrontier"><span>Frontiers</span></label>
+          <label class="switch"><input type="checkbox" id="tgTrail" checked><span>Trail</span></label>
+          <span class="maptools__spacer"></span>
+          <span class="mono" id="mapTargetStatus">No delivery target selected</span>
+          <span class="mono" id="mapPose">—</span>
+        </div>
+      </article>
+    </section>
+
+    <!-- ═══════════════ 4. CAMERA ═══════════════ -->
+    <section class="page" data-page="camera">
+      <div class="page__head">
+        <h1>Camera</h1>
+        <p class="page__sub">Forward view with detected obstacles.</p>
+      </div>
+      <article class="card card--flush">
+        <div class="camwrap">
+          <canvas id="camCanvas" width="640" height="480"></canvas>
+          <div class="camwrap__hud">
+            <span class="pill" id="camFps">—</span>
+            <span class="pill" id="camDet">—</span>
+          </div>
+        </div>
+      </article>
+      <article class="card">
+        <h2 class="card__title">Detections</h2>
+        <ul class="detlist" id="detList"><li class="feed__empty">Nothing in view.</li></ul>
+      </article>
+    </section>
+
+    <!-- ═══════════════ 5. ANALYTICS ═══════════════ -->
+    <section class="page" data-page="analytics">
+      <div class="page__head">
+        <h1>Analytics</h1>
+        <p class="page__sub">Rolling window, last 60 samples.</p>
+      </div>
+      <div class="grid grid--charts">
+        <article class="card chart"><h2 class="card__title">Coverage %</h2><canvas data-chart="coverage" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">Battery %</h2><canvas data-chart="battery" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">CPU %</h2><canvas data-chart="cpu" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">Memory MB</h2><canvas data-chart="ram" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">Loop rate FPS</h2><canvas data-chart="fps" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">Speed m/s</h2><canvas data-chart="speed" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">Localisation drift px</h2><canvas data-chart="drift" height="150"></canvas></article>
+        <article class="card chart"><h2 class="card__title">Route length m</h2><canvas data-chart="path" height="150"></canvas></article>
+      </div>
+      <article class="card">
+        <h2 class="card__title">Delivery times</h2>
+        <table class="table" id="deliveryTable">
+          <thead><tr><th>Destination</th><th>Payload</th><th>Completed</th><th class="num">Duration</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </article>
+    </section>
+
+    <!-- ═══════════════ 6. SETTINGS ═══════════════ -->
+    <section class="page" data-page="settings">
+      <div class="page__head">
+        <h1>Settings</h1>
+        <p class="page__sub">Connection and operating preferences.</p>
+      </div>
+      <article class="card">
+        <h2 class="card__title">Data source</h2>
+        <div class="field">
+          <label for="setSource">Backend</label>
+          <select id="setSource">
+            <option value="mock">Demo data (no robot connected)</option>
+            <option value="http">Live robot</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="setHost">Robot address</label>
+          <input id="setHost" type="text" value="http://raspberrypi.local:5000">
+        </div>
+        <button class="btn" id="setApply">Apply</button>
+        <p class="note">Switching to <em>Live robot</em> points every request at the
+           address above. Nothing else in the interface changes.</p>
+      </article>
+      <article class="card">
+        <h2 class="card__title">Operating</h2>
+        <div class="field">
+          <label for="setDock">Return to dock below</label>
+          <input id="setDock" type="range" min="10" max="60" value="25">
+          <output id="setDockOut">25%</output>
+        </div>
+        <label class="switch"><input type="checkbox" id="setSound"><span>Audible alerts</span></label>
+        <label class="switch"><input type="checkbox" id="setMotion"><span>Reduce motion</span></label>
+      </article>
+    </section>
+
+  </main>
+
+  <!-- ══ CONTROL DOCK ══ -->
+  <aside class="controls" aria-label="Vehicle controls">
+    <h2 class="controls__title">Controls</h2>
+    <button class="btn btn--primary" data-cmd="start">Start mission</button>
+    <button class="btn" data-cmd="pause">Pause</button>
+    <button class="btn" data-cmd="resume">Resume</button>
+    <button class="btn" data-cmd="dock">Return to dock</button>
+    <button class="btn" data-cmd="reset">Reset map</button>
+    <div class="controls__split"></div>
+    <button class="btn btn--ghost" data-cmd="export-map">Export map</button>
+    <button class="btn btn--ghost" data-cmd="export-logs">Export logs</button>
+    <div class="controls__split"></div>
+    <label class="switch"><input type="checkbox" id="manualMode"><span>Manual driving</span></label>
+    <p class="note" id="manualDriveStatus" aria-live="polite">Controller status: waiting for live robot telemetry.</p>
+    <div class="drive-pad" aria-label="Hold a direction to drive manually" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+      <button class="btn" style="grid-column:2" type="button" data-drive="forward" aria-label="Drive forward">▲</button>
+      <div class="drive-pad__middle" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+        <button class="btn" type="button" data-drive="left" aria-label="Turn left">◀</button>
+        <button class="btn" type="button" data-drive="stop" aria-label="Stop driving">■</button>
+        <button class="btn" type="button" data-drive="right" aria-label="Turn right">▶</button>
+      </div>
+      <button class="btn" style="grid-column:2" type="button" data-drive="reverse" aria-label="Drive reverse">▼</button>
+      <p class="note" style="grid-column:1/-1">Press and hold a direction; releasing or losing browser focus sends stop. Manual mode is mutually exclusive with autonomous Start/Resume.</p>
+    </div>
+    <button class="btn btn--stop" data-cmd="estop">Emergency stop</button>
+    <button class="btn" data-cmd="rearm" title="Clears the software E-stop latch but does not move the robot">Acknowledge E-stop / Re-arm</button>
+  </aside>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
