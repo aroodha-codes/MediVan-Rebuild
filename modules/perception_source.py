@@ -360,24 +360,35 @@ class CameraPerceptionSource(PerceptionSource):
     @staticmethod
     def segment_floor(frame: np.ndarray,
                       sample_rows: int = 30,
-                      tol: float = 2.5) -> np.ndarray:
+                      tol: float = 3.2) -> np.ndarray:
         """Boolean mask, True where a pixel is judged to be floor.
 
-        The bottom `sample_rows` rows are assumed floor (they are immediately
-        in front of the wheels). Their mean and covariance in Lab colour space
-        define a reference distribution; every pixel is then accepted if its
-        Mahalanobis-style deviation is within `tol` standard deviations.
-        Lab is used because it separates luminance from chroma, so the mask
-        survives the uneven overhead lighting typical of hospital corridors.
+        The bottom rows in front of the wheels are sampled for floor color.
+        To avoid sampling the robot's own chassis bumper, castor, or mount shadow
+        at the very bottom edge, sampling is taken from rows (h - 12 - sample_rows)
+        to (h - 12), and within the central 70% width.
+        Their mean and covariance in Lab colour space define a reference distribution;
+        every pixel is accepted if its deviation is within `tol` standard deviations.
+        A floor standard deviation is enforced so uniform floors do not over-reject
+        subtle tile seams or lighting variations.
         """
         import cv2
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB).astype(np.float32)
-        h = lab.shape[0]
-        ref = lab[h - sample_rows:, :, :].reshape(-1, 3)
+        h, w = lab.shape[:2]
+        y_end = max(1, h - 12)
+        y_start = max(0, y_end - sample_rows)
+        x_start = int(w * 0.15)
+        x_end = int(w * 0.85)
+        ref = lab[y_start:y_end, x_start:x_end, :].reshape(-1, 3)
         mu = ref.mean(axis=0)
-        sd = ref.std(axis=0) + 1e-3
+        sd = np.maximum(ref.std(axis=0), 8.0)
         dev = np.abs(lab - mu) / sd
-        return np.all(dev < tol, axis=2)
+        raw_mask = np.all(dev < tol, axis=2)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask = cv2.morphologyEx(raw_mask.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
+        mask[max(0, h - 15):, :] = True
+        return mask
 
     # -- stage 4 ---------------------------------------------------
 

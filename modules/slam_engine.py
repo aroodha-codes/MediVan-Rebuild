@@ -147,6 +147,12 @@ class SLAMEngine:
         # do not use it for new work.
         if scan is not None:
             walls, frees = self._cells_from_scan(scan)
+            # If scan had zero valid returns (e.g. poor lighting or camera glitch),
+            # fall back to camera edge extraction so SLAM never drops observation completely.
+            if not walls and not frees and cam_frame is not None:
+                walls, frees = self._extract_walls_from_camera(
+                    cam_frame, robot_x, robot_y, robot_theta
+                )
         else:
             walls, frees = self._extract_walls_from_camera(
                 cam_frame, robot_x, robot_y, robot_theta
@@ -159,7 +165,7 @@ class SLAMEngine:
         self._update_particle_weights(robot_x, robot_y)
         self._resample_if_needed()
 
-        # 5. Mark visited cells around robot
+        # 5. Mark visited cells around robot as definitely free in occupancy grid
         gx = int(robot_x) // SLAM_GRID_RESOLUTION
         gy = int(robot_y) // SLAM_GRID_RESOLUTION
         for dy in range(-1, 2):
@@ -167,6 +173,9 @@ class SLAMEngine:
                 nx, ny = gx + dx, gy + dy
                 if 0 <= nx < _GW and 0 <= ny < _GH:
                     self._visited[ny, nx] = True
+                    # A physical vehicle can only occupy and traverse free space.
+                    # Record the traversed footprint as known-free corridor.
+                    self.grid[ny, nx] = min(self.grid[ny, nx], -1.0)
 
         # 6. Process semantic landmarks from AI results
         if ai_results:

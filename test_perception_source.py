@@ -54,3 +54,15 @@ def test_scan_origin_includes_forward_camera_mount_offset():
     assert abs(scan.pose[0] - (x + CAMERA_FORWARD_OFFSET_M / MAP_SCALE_M_PER_PX)) < 1e-6
     assert abs(scan.pose[1] - y) < 1e-6
     assert abs(scan.pose[2] - theta) < 1e-6
+
+
+def test_segment_floor_tolerates_bottom_edge_and_lighting():
+    # Frame with uniform floor color (200, 200, 200) and dark chassis at bottom 5 rows (0, 0, 0)
+    frame = np.full((240, 320, 3), 200, dtype=np.uint8)
+    frame[-5:, :, :] = 0  # dark chassis
+    mask = CameraPerceptionSource.segment_floor(frame)
+    # The actual floor (e.g. row 100, col 160) should be recognized as floor
+    assert mask[100, 160] == True
+    # The bottom rows should be treated as clear
+    assert mask[-1, 160] == True
+

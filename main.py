@@ -1140,12 +1140,17 @@ def main() -> None:
 
                     )
                     if frame_count % 30 == 0:
+                        _valid_rays = int(np.count_nonzero(real_scan.valid)) if real_scan is not None else 0
+                        _hit_rays = int(np.count_nonzero(real_scan.hit & real_scan.valid)) if real_scan is not None else 0
+                        _free_c = int(np.count_nonzero(slam.grid < -0.3))
+                        _wall_c = int(np.count_nonzero(slam.grid > 0.3))
                         print(
                             f"[SLAM DEBUG] "
                             f"x={motor.x:.1f} y={motor.y:.1f} "
                             f"theta={math.degrees(motor.theta):.1f}deg "
-                            f"mapping_complete={slam.mapping_complete} "
-                            f"scan={'YES' if real_scan is not None else 'NO'}"
+                            f"scan_valid={_valid_rays} scan_hits={_hit_rays} "
+                            f"grid_free={_free_c} grid_walls={_wall_c} "
+                            f"cov={slam.coverage*100:.1f}%"
                         )
 
                     if slam.mapping_complete and (not HARDWARE_MODE or
@@ -1921,8 +1926,7 @@ def main() -> None:
                                     float(_grid[_gy + 1, _gx]) < -0.3 or
                                     float(_grid[_gy, _gx - 1]) < -0.3 or
                                     float(_grid[_gy, _gx + 1]) < -0.3):
-                                    _frontiers.append([_gx * SLAM_GRID_RESOLUTION + SLAM_GRID_RESOLUTION // 2,
-                                                       _gy * SLAM_GRID_RESOLUTION + SLAM_GRID_RESOLUTION // 2])
+                                    _frontiers.append([_gx, _gy])
                                     if len(_frontiers) >= 350:
                                         break
                             if len(_frontiers) >= 350:

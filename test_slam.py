@@ -44,3 +44,22 @@ class TestSLAMEngine:
     def test_update_returns_float(self, slam, dummy_frame):
         r = slam.update(dummy_frame, 0, 0, 0, 125, 465, -math.pi/2)
         assert isinstance(r, float) and 0.0 <= r <= 1.0
+
+    def test_robot_footprint_marked_free_in_grid(self, slam, dummy_frame):
+        # When robot drives to (300, 300), the traversed cells should be marked free in the SLAM grid
+        slam.update(dummy_frame, 10.0, 0, 0, 300.0, 300.0, 0.0)
+        gx, gy = int(300.0) // 10, int(300.0) // 10
+        assert slam.grid[gy, gx] <= -1.0
+        assert bool(slam._visited[gy, gx]) is True
+
+    def test_slam_falls_back_when_scan_empty(self, slam, dummy_frame):
+        from modules.perception_source import RangeScan
+        k = 62
+        empty_scan = RangeScan(
+            angles=np.zeros(k), ranges=np.full(k, 150.0),
+            hit=np.zeros(k, dtype=bool), valid=np.zeros(k, dtype=bool),
+            max_range=150.0, pose=(200.0, 200.0, 0.0)
+        )
+        # Should not crash and should fall back to extracting features from dummy_frame
+        cov = slam.update(dummy_frame, 0, 0, 0, 200.0, 200.0, 0.0, scan=empty_scan)
+        assert isinstance(cov, float)
