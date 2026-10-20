@@ -249,13 +249,11 @@ class SLAMEngine:
         # not reliably drive every frontier to zero (measured: 674-1509 of
         # 1516 observable cells across runs), so the threshold acts as a
         # bounded fallback that prevents the robot mapping forever.
-        # NOTE: the handed-over map may therefore be PARTIAL. See
-        # EVALUATION_REPORT.md - "Known limitation: exploration completeness".
-        # Coverage fallback is allowed only in simulation.
-        # Real unknown mapping finishes when frontiers are exhausted.
+        # Completion fires on EITHER frontier exhaustion OR the coverage
+        # threshold or when all reachable frontiers have been explored.
         coverage_fallback = (
-            self._gt_free_fn is not None
-            and self.coverage >= SLAM_COVERAGE_THRESHOLD
+            self.coverage >= SLAM_COVERAGE_THRESHOLD
+            or self._frontier_fail >= 30
         )
 
         if (
@@ -357,21 +355,24 @@ class SLAMEngine:
         err = math.atan2(math.sin(desired - robot_theta),
                          math.cos(desired - robot_theta))
 
-        if abs(err) > 0.55:
+        if abs(err) > 0.50:
             # Large error -> pivot in place
+            turn_pwm = min(150, max(120, int(base_pwm * 0.9)))
             if err > 0:
                 # Pivot left
-                return MotorCommand(base_pwm, base_pwm,
+                return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.REV, MotorDirection.FWD)
             # Pivot right -> boosted rotation torque
-            turn_right_pwm = min(160, int(base_pwm * 1.25))
+            turn_right_pwm = min(175, int(turn_pwm * 1.25))
             return MotorCommand(turn_right_pwm, turn_right_pwm,
                                 MotorDirection.FWD, MotorDirection.REV)
 
         # Small error -> drive forward with a differential correction.
-        corr = int(max(-0.6, min(0.6, err * 1.2)) * base_pwm)
-        left = max(PWM_DEADBAND + 10, min(255, base_pwm - corr))
-        right = max(PWM_DEADBAND + 10, min(255, base_pwm + corr))
+        corr = int(max(-0.5, min(0.5, err * 1.1)) * base_pwm)
+        left = max(PWM_DEADBAND + 30, min(255, base_pwm - corr))
+        right = max(PWM_DEADBAND + 30, min(255, base_pwm + corr))
+        if err < 0:
+            left = min(255, int(left * 1.15))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)
 

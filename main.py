@@ -1412,6 +1412,17 @@ def main() -> None:
 
                         battery_pct=dock.battery_pct)
 
+                    if frame_count % 30 == 0 and physical_mission_phase in ("DELIVER", "RETURN"):
+                        print(
+                            f"[DELIVERY DEBUG] "
+                            f"phase={physical_mission_phase} "
+                            f"left_pwm={motor_cmd.pwm_a} "
+                            f"right_pwm={motor_cmd.pwm_b} "
+                            f"left_dir={motor_cmd.dir_a} "
+                            f"right_dir={motor_cmd.dir_b} "
+                            f"wp={planner.path_index}/{len(planner.path)}"
+                        )
+
 
 
             except Exception as e:

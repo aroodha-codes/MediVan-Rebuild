@@ -903,31 +903,38 @@ class PathPlanner:
 
                     self._junction_action = None
 
+        # Check for destination arrival
+        if self.path_index >= len(self.path) - 1:
+            dest_x, dest_y = self.path[-1]
+            if math.hypot(vx - dest_x, vy - dest_y) < LOOKAHEAD_DIST_PX:
+                return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
+
         # ======================================================
-        # FINAL MOTOR PWM
+        # FINAL MOTOR PWM (Pivot vs Forward differential drive)
         # ======================================================
 
-        pwm_left = int(
-            base - pwm_diff
-        )
+        # Large heading error: pivot in place towards the waypoint
+        if abs(angle_to_la) > 0.45:
+            turn_pwm = min(150, max(120, int(base * 0.9)))
+            if angle_to_la > 0:
+                # Pivot left
+                return MotorCommand(turn_pwm, turn_pwm,
+                                    MotorDirection.REV, MotorDirection.FWD)
+            # Pivot right with boosted rotation torque
+            turn_right_pwm = min(175, int(turn_pwm * 1.25))
+            return MotorCommand(turn_right_pwm, turn_right_pwm,
+                                MotorDirection.FWD, MotorDirection.REV)
 
-        pwm_right = int(
-            base + pwm_diff
-        )
-
-        pwm_left = max(
-            PWM_DEADBAND,
-            min(255, pwm_left)
-        )
-
-        pwm_right = max(
-            PWM_DEADBAND,
-            min(255, pwm_right)
-        )
+        # Small heading error: drive forward with proportional differential correction
+        corr = int(max(-0.5, min(0.5, angle_to_la * 1.1)) * base)
+        pwm_left = max(PWM_DEADBAND + 30, min(255, base - corr))
+        pwm_right = max(PWM_DEADBAND + 30, min(255, base + corr))
+        if angle_to_la < 0:
+            pwm_left = min(255, int(pwm_left * 1.15))
 
         return MotorCommand(
-            pwm_left,
-            pwm_right,
+            int(pwm_left),
+            int(pwm_right),
             MotorDirection.FWD,
             MotorDirection.FWD,
         )
