@@ -450,12 +450,31 @@
       if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
       if (wasDriving && API.source === 'http') sendDashboardDrive('stop');
     }
+    async function ensureManualMode() {
+      if (!$('#manualMode').checked) {
+        $('#manualMode').checked = true;
+        try {
+          await API.robot.command('manual');
+          toast('info', 'Manual driving enabled', 'Drive with held buttons or W/A/S/D / Arrow keys.');
+        } catch (err) {
+          $('#manualMode').checked = false;
+          throw err;
+        }
+      }
+    }
+
     $$('[data-drive]').forEach(btn => {
       btn.addEventListener('contextmenu', e => e.preventDefault());
-      btn.addEventListener('pointerdown', e => {
-        if (!$('#manualMode').checked || API.source !== 'http') {
+      btn.addEventListener('pointerdown', async e => {
+        if (API.source !== 'http') {
           e.preventDefault();
-          toast('warn', 'Manual drive unavailable', 'Choose Live robot and click Apply. Enable Manual driving, then press and hold a direction; do not press Resume during manual control.');
+          toast('warn', 'Manual drive unavailable', 'Dashboard is not connected to a live robot.');
+          return;
+        }
+        try {
+          await ensureManualMode();
+        } catch (err) {
+          toast('bad', 'Manual mode failed', err.message || String(err));
           return;
         }
         e.preventDefault();
@@ -480,12 +499,17 @@
       ArrowRight: 'right', KeyD: 'right',
       Space: 'stop',
     };
-    window.addEventListener('keydown', e => {
-      if (!$('#manualMode').checked || API.source !== 'http') return;
+    window.addEventListener('keydown', async e => {
+      if (API.source !== 'http') return;
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
       const dir = KEY_DIR_MAP[e.code];
       if (!dir) return;
       e.preventDefault();
+      try {
+        await ensureManualMode();
+      } catch (_) {
+        return;
+      }
       if (dashboardDriveDirection === dir) return;
       if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
       dashboardDriveDirection = dir;
@@ -495,7 +519,7 @@
       }, 140);
     });
     window.addEventListener('keyup', e => {
-      if (!$('#manualMode').checked || API.source !== 'http') return;
+      if (API.source !== 'http') return;
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
       const dir = KEY_DIR_MAP[e.code];
       if (dir && dashboardDriveDirection === dir) {
@@ -553,10 +577,12 @@
   /* ═════════ BOOT ═════════ */
   function boot() {
     const hostField = $('#setHost');
-    if (hostField && location.port === '5000') {
-      hostField.value = `${location.protocol}//${location.hostname}:5000`;
+    if (location.protocol.startsWith('http')) {
+      const liveHost = `${location.protocol}//${location.hostname}:${location.port || '5000'}`;
+      if (hostField) hostField.value = liveHost;
       const sourceField = $('#setSource');
-      if (sourceField) { sourceField.value = 'http'; API.configure({ source: 'http', host: hostField.value }); }
+      if (sourceField) sourceField.value = 'http';
+      API.configure({ source: 'http', host: liveHost });
     }
     updateDestinationOptions();
     initTrace();
@@ -584,5 +610,9 @@
     }, 1400);
   }
 
-  document.addEventListener('DOMContentLoaded', boot);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();

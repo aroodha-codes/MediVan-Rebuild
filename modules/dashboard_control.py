@@ -20,7 +20,7 @@ _ALLOWED_COMMANDS = {
     "finish-explore", "save-map",
 }
 _ALLOWED_DIRECTIONS = {"stop", "forward", "reverse", "left", "right"}
-_MANUAL_DEADMAN_S = 0.40
+_MANUAL_DEADMAN_S = 0.75
 
 
 def _now_iso() -> str:

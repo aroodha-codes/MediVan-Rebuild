@@ -1909,7 +1909,7 @@ def main() -> None:
                     if slam is not None:
                         _grid = slam.grid
                         _gh, _gw = _grid.shape
-                        _cells = [1 if float(v) > 0.5 else (-1 if float(v) < -0.5 else 0)
+                        _cells = [1 if float(v) > 0.3 else (-1 if float(v) < -0.3 else 0)
                                   for v in _grid.reshape(-1)]
                         _frontiers = []
                         # A frontier is unknown space adjacent to a cell observed free.
@@ -1917,10 +1917,10 @@ def main() -> None:
                             for _gx in range(1, _gw - 1):
                                 if abs(float(_grid[_gy, _gx])) > 0.3:
                                     continue
-                                if (float(_grid[_gy - 1, _gx]) < -0.5 or
-                                    float(_grid[_gy + 1, _gx]) < -0.5 or
-                                    float(_grid[_gy, _gx - 1]) < -0.5 or
-                                    float(_grid[_gy, _gx + 1]) < -0.5):
+                                if (float(_grid[_gy - 1, _gx]) < -0.3 or
+                                    float(_grid[_gy + 1, _gx]) < -0.3 or
+                                    float(_grid[_gy, _gx - 1]) < -0.3 or
+                                    float(_grid[_gy, _gx + 1]) < -0.3):
                                     _frontiers.append([_gx * SLAM_GRID_RESOLUTION + SLAM_GRID_RESOLUTION // 2,
                                                        _gy * SLAM_GRID_RESOLUTION + SLAM_GRID_RESOLUTION // 2])
                                     if len(_frontiers) >= 350:
