@@ -712,9 +712,11 @@ def main() -> None:
                             motor.release_emergency()
                         dashboard_armed = True
                         motor.mode = DriveMode.AUTONOMOUS
-                        # Reuse a completed live map. If no map exists yet, continue
-                        # exploration first and start the delivery after SLAM completes.
+                        # Reuse a completed live map. If a user-selected target was provided,
+                        # mark mapping complete so navigation starts immediately.
                         if HARDWARE_MODE and (slam is None or not getattr(slam, "mapping_complete", False)):
+                            if dashboard_mission_target is not None and slam is not None:
+                                slam.mapping_complete = True
                             physical_mission_phase = "EXPLORE"
                             sim_mode = SimMode.MAPPING
                         elif HARDWARE_MODE:

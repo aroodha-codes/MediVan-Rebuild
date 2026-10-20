@@ -237,8 +237,11 @@
     const targetStatus = $('#mapTargetStatus');
     if (targetStatus) targetStatus.textContent = state.selectedTarget
       ? `Selected target x=${Math.round(state.selectedTarget[0])} y=${Math.round(state.selectedTarget[1])}`
-      : (API.source === 'http' && $('#mDest')?.value === 'map-selected'
-        ? 'Click the map to select a target' : 'No delivery target selected');
+      : (API.source === 'http' ? 'Click explored map to set delivery target' : 'No delivery target selected');
+    const dispatchBtn = $('#btnDispatchTarget');
+    if (dispatchBtn) {
+      dispatchBtn.style.display = (state.selectedTarget && API.source === 'http') ? 'inline-block' : 'none';
+    }
     const p = m.pose;
     ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.theta);
     ctx.fillStyle = '#3FA34D';
@@ -479,7 +482,9 @@
       drawMap();
     });
     $('#mapCanvas').addEventListener('click', e => {
-      if (API.source !== 'http' || $('#mDest').value !== 'map-selected') return;
+      if (API.source !== 'http') return;
+      const destEl = $('#mDest');
+      if (destEl) destEl.value = 'map-selected';
       const cv = e.currentTarget;
       const rect = cv.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
@@ -487,8 +492,20 @@
       const y = Math.max(0, Math.min(cv.height - 1, Math.round((e.clientY - rect.top) / rect.height * cv.height)));
       state.selectedTarget = [x, y];
       drawMap();
-      toast('info', 'Delivery target selected', `Map position x=${x}, y=${y}. The controller will reject unknown, occupied, or insufficient-clearance positions.`);
+      toast('info', 'Delivery target selected', `Target marked at (${x}, ${y}). Click 'Dispatch Delivery' to send MediVan.`);
     });
+    const dispatchBtn = $('#btnDispatchTarget');
+    if (dispatchBtn) {
+      dispatchBtn.addEventListener('click', async () => {
+        if (!state.selectedTarget) return;
+        try {
+          await API.missions.add('map-selected', 'Custom Map Delivery', 1, state.selectedTarget);
+          toast('ok', 'Delivery dispatched', `Vehicle navigating to target (${state.selectedTarget[0]}, ${state.selectedTarget[1]}).`);
+        } catch (err) {
+          toast('error', 'Delivery rejected', err.message || String(err));
+        }
+      });
+    }
     $('#setApply').addEventListener('click', () => {
       API.configure({ source: $('#setSource').value, host: $('#setHost').value });
       updateDestinationOptions();
