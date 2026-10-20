@@ -525,8 +525,8 @@ SLAM_GRID_RESOLUTION: int = 10              # px per grid cell (matches A*)
 SLAM_CAMERA_FOV_DEG: float = 60.0           # camera field of view
 SLAM_CAMERA_RANGE_PX: int = 150             # max camera detection range
 SLAM_WALL_FOLLOW_PWM: int = 140             # PWM during exploration driving
-SLAM_LOG_ODDS_FREE: float = -0.4            # log-odds decrement for free cells
-SLAM_LOG_ODDS_OCC: float = 0.85             # log-odds increment for occupied cells
+SLAM_LOG_ODDS_FREE: float = -0.40           # log-odds decrement for free cells
+SLAM_LOG_ODDS_OCC: float = 0.55             # log-odds increment for occupied cells (balanced with free)
 SLAM_LOG_ODDS_PRIOR: float = 0.0            # initial log-odds (unknown)
 
 # ════════════════════════════════════════════════
@@ -598,6 +598,7 @@ class DriveMode(enum.Enum):
 class SimMode(enum.Enum):
     """Simulation operating mode."""
     MAPPING = "mapping"          # SLAM builds the map
+    READY = "ready"              # Map saved, ready for delivery dispatch
     NAVIGATION = "navigation"    # Uses preloaded map
 
 

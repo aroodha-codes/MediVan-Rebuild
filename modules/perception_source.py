@@ -363,47 +363,67 @@ class CameraPerceptionSource(PerceptionSource):
                       tol: float = 3.2) -> np.ndarray:
         """Boolean mask, True where a pixel is judged to be floor.
 
-        The bottom rows in front of the wheels are sampled for floor color.
-        To avoid sampling the robot's own chassis bumper, castor, or mount shadow
-        at the very bottom edge, sampling is taken from rows (h - 12 - sample_rows)
-        to (h - 12), and within the central 70% width.
-        Their mean and covariance in Lab colour space define a reference distribution;
-        every pixel is accepted if its deviation is within `tol` standard deviations.
-        A floor standard deviation is enforced so uniform floors do not over-reject
-        subtle tile seams or lighting variations.
+        Optimized, illumination-tolerant indoor floor segmentation:
+        1. Reference sampling avoids robot bumper/castor/shadow at bottom 15 rows.
+        2. In Lab colour space, Luminance (L) variation is decoupled from Chroma (a, b).
+           Luminance std floor is set to 35.0 to absorb overhead lighting falloff and
+           corridor shadows, while chromaticity (a, b) std floor is 9.0 to strictly
+           distinguish colored obstacles, walls, furniture, and baseboards.
+        3. Morphological opening (3x3) eliminates isolated single-pixel noise.
+        4. Morphological closing (3x7) bridges thin tile seams, grout lines, and glare.
+        5. Region immediately in front of wheels is treated as clear.
         """
         import cv2
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
         h, w = lab.shape[:2]
-        y_end = max(1, h - 12)
+        y_end = max(1, h - 15)
         y_start = max(0, y_end - sample_rows)
         x_start = int(w * 0.15)
         x_end = int(w * 0.85)
-        ref = lab[y_start:y_end, x_start:x_end, :].reshape(-1, 3)
-        mu = ref.mean(axis=0)
-        sd = np.maximum(ref.std(axis=0), 8.0)
-        dev = np.abs(lab - mu) / sd
-        raw_mask = np.all(dev < tol, axis=2)
+        ref = lab[y_start:y_end, x_start:x_end, :]
+        mu = ref.mean(axis=(0, 1))
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        mask = cv2.morphologyEx(raw_mask.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
+        # Decouple Luminance (L) tolerance from Chroma (a, b)
+        sd_L = max(float(ref[:, :, 0].std()), 35.0)
+        sd_a = max(float(ref[:, :, 1].std()), 9.0)
+        sd_b = max(float(ref[:, :, 2].std()), 9.0)
+        sd = np.array([sd_L, sd_a, sd_b], dtype=np.float32)
+
+        dev = np.abs(lab.astype(np.float32) - mu) / sd
+        raw_mask = np.all(dev < tol, axis=2).astype(np.uint8)
+
+        # 3x3 open removes isolated speckle noise
+        k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask_open = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, k_open)
+
+        # 3x7 vertical close bridges grout lines, tile seams and reflections
+        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
+        mask_clean = cv2.morphologyEx(mask_open, cv2.MORPH_CLOSE, k_close)
+
+        mask = mask_clean.astype(bool)
         mask[max(0, h - 15):, :] = True
         return mask
 
     # -- stage 4 ---------------------------------------------------
 
     @staticmethod
-    def floor_boundary(mask: np.ndarray) -> np.ndarray:
-        """Row index of the first non-floor pixel per column, scanning up.
+    def floor_boundary(mask: np.ndarray, horizon_row: Optional[int] = None) -> np.ndarray:
+        """Row index of the first real non-floor obstacle per column, scanning up.
 
-        Returns -1 for columns that are floor all the way to the top (no
-        obstacle within view) -- which must be reported as `hit=False`, not
-        as an obstacle at max range.
+        Searches from the bottom (h - 1) up to `horizon_row` (the camera horizon /
+        max range cutoff). Ground obstacles beyond 7.5 m or in the ceiling/air above
+        horizon_row are not on the navigable floor plane.
+
+        Returns -1 for columns that are floor all the way up to horizon_row
+        (open corridor / free space with no obstacle within ground range).
         """
         h, w = mask.shape
-        not_floor = ~mask[::-1, :]
-        has_obstacle = not_floor.any(axis=0)
-        idx_from_bottom = not_floor.argmax(axis=0)
+        if horizon_row is None:
+            horizon_row = int(round(h * 125.0 / 240.0))
+        top_row = max(0, min(h - 1, horizon_row))
+        ground_slice = ~mask[top_row:h, :]
+        has_obstacle = ground_slice.any(axis=0)
+        idx_from_bottom = ground_slice[::-1, :].argmax(axis=0)
         return np.where(has_obstacle, (h - 1) - idx_from_bottom, -1).astype(np.int32)
 
     # -- stage 5 ---------------------------------------------------

@@ -1174,12 +1174,12 @@ def main() -> None:
                                     if _free_fn(*candidate):
                                         physical_mission_goal = candidate
                                     else:
-                                        # Snap to nearest free cell within 25 px
+                                        # Snap to nearest free cell within 45 px
                                         best_free = None
                                         best_d = 999
                                         res = SLAM_GRID_RESOLUTION
-                                        for dx in range(-25, 26, res):
-                                            for dy in range(-25, 26, res):
+                                        for dx in range(-45, 46, res):
+                                            for dy in range(-45, 46, res):
                                                 nx, ny = candidate[0] + dx, candidate[1] + dy
                                                 if _free_fn(nx, ny):
                                                     d = math.hypot(dx, dy)
@@ -1193,7 +1193,7 @@ def main() -> None:
                                     physical_mission_goal = select_reachable_destination(slam, motor.x, motor.y)
                                     _why = "No sufficiently distant reachable known-free target." if physical_mission_goal is None else ""
                                 if physical_mission_goal is not None and math.hypot(
-                                        physical_mission_goal[0] - motor.x, physical_mission_goal[1] - motor.y) < 20:
+                                        physical_mission_goal[0] - motor.x, physical_mission_goal[1] - motor.y) < 10:
                                     physical_mission_goal = None
                                     _why = "Delivery target is too close to the current pose."
                                 if physical_mission_goal is None:
@@ -1319,10 +1319,11 @@ def main() -> None:
                                 map_width=MAP_WIDTH, map_height=MAP_HEIGHT,
                             )
                             if not path:
-                                print(f"[main] BLOCKED: no known-free SLAM path for {physical_mission_phase}; stopping")
-                                physical_mission_phase = "STOP"
-                                motor.emergency_stop()
-                                dashboard_armed = False
+                                if not planner.path or planner.path_complete:
+                                    print(f"[main] BLOCKED: no known-free SLAM path for {physical_mission_phase}; stopping")
+                                    physical_mission_phase = "STOP"
+                                    motor.emergency_stop()
+                                    dashboard_armed = False
                     else:
                         def grid_fn(x: int, y: int) -> CellType:
                             return CellType.WALL

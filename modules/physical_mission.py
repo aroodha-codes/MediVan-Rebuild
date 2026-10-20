@@ -78,7 +78,12 @@ def select_reachable_destination(slam, start_x: float, start_y: float,
         return True
 
     if not traversable(sx, sy):
-        return None
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1)):
+            if traversable(sx + dx, sy + dy):
+                sx, sy = sx + dx, sy + dy
+                break
+        else:
+            return None
 
     dist = {(sx, sy): 0}
     queue = deque([(sx, sy)])

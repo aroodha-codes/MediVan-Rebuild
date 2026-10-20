@@ -66,3 +66,23 @@ def test_segment_floor_tolerates_bottom_edge_and_lighting():
     # The bottom rows should be treated as clear
     assert mask[-1, 160] == True
 
+
+def test_floor_boundary_reports_clear_when_floor_reaches_horizon():
+    # Mask where ground plane (rows 125 to 239) is clear floor, and ceiling (rows 0 to 120) is non-floor
+    mask = np.ones((240, 320), dtype=bool)
+    mask[:125, :] = False  # ceiling/horizon is non-floor
+    boundary = CameraPerceptionSource.floor_boundary(mask, horizon_row=125)
+    # All columns should report clear (-1), not false obstacle hits on the ceiling
+    assert np.all(boundary == -1)
+
+
+def test_floor_boundary_detects_real_ground_obstacle():
+    mask = np.ones((240, 320), dtype=bool)
+    mask[:125, :] = False
+    # Ground obstacle in columns 50 to 100 at rows 170-200
+    mask[170:201, 50:101] = False
+    boundary = CameraPerceptionSource.floor_boundary(mask, horizon_row=125)
+    assert boundary[70] == 200
+    assert boundary[10] == -1
+
+
