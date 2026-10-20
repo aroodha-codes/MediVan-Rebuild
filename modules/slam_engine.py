@@ -317,25 +317,27 @@ class SLAMEngine:
                 self._frontier_idx = 0
                 self._frontier_fail = 0
             else:
-                # No reachable frontier: sweep in place to open new ones.
+                # No reachable frontier: sweep in place to open new ones with boosted rotation torque.
                 self._frontier_fail += 1
                 self._frontier_goal = None
                 self._frontier_path = []
-                return MotorCommand(base_pwm, base_pwm,
+                turn_pwm = min(150, int(base_pwm * 1.20))
+                return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
 
         # ── advance the waypoint cursor ──────────────────────────────────
         while self._frontier_idx < len(self._frontier_path):
             wx, wy = self._frontier_path[self._frontier_idx]
             px, py = wx * res + res // 2, wy * res + res // 2
-            if math.hypot(px - robot_x, py - robot_y) < res * 0.9:
+            if math.hypot(px - robot_x, py - robot_y) < res * 1.1:
                 self._frontier_idx += 1
             else:
                 break
 
         if self._frontier_idx >= len(self._frontier_path):
             self._frontier_goal = None
-            return MotorCommand(base_pwm, base_pwm,
+            turn_pwm = min(150, int(base_pwm * 1.20))
+            return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.FWD, MotorDirection.REV)
 
         wx, wy = self._frontier_path[self._frontier_idx]
@@ -347,18 +349,20 @@ class SLAMEngine:
                          math.cos(desired - robot_theta))
 
         if abs(err) > 0.55:
-            # Large error -> pivot in place (near-zero forward velocity, so
-            # the pose stays collision-free and the heading can change).
+            # Large error -> pivot in place
             if err > 0:
+                # Pivot left
                 return MotorCommand(base_pwm, base_pwm,
                                     MotorDirection.REV, MotorDirection.FWD)
-            return MotorCommand(base_pwm, base_pwm,
+            # Pivot right -> boosted rotation torque
+            turn_right_pwm = min(150, int(base_pwm * 1.20))
+            return MotorCommand(turn_right_pwm, turn_right_pwm,
                                 MotorDirection.FWD, MotorDirection.REV)
 
         # Small error -> drive forward with a differential correction.
         corr = int(max(-0.6, min(0.6, err * 1.2)) * base_pwm)
-        left = max(PWM_DEADBAND + 5, min(255, base_pwm - corr))
-        right = max(PWM_DEADBAND + 5, min(255, base_pwm + corr))
+        left = max(PWM_DEADBAND + 10, min(255, base_pwm - corr))
+        right = max(PWM_DEADBAND + 10, min(255, base_pwm + corr))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)
 
@@ -397,27 +401,18 @@ class SLAMEngine:
         return False
 
     def _cell_traversable(self, nx: int, ny: int, free_fn) -> bool:
-        """Can the VEHICLE occupy this cell, not just a point?
-
-        The previous BFS tested only the cell centre with free_fn(). The
-        chassis is VEHICLE_WIDTH_PX wide, so the planner happily routed
-        through gaps narrower than the robot; the van then jammed against a
-        doorframe and exploration plateaued with frontiers still open
-        (measured: ~750/1516 cells, ~60 frontiers unreachable, no further
-        progress after ~2500 ticks).
-
-        Sampling the footprint corners makes the plan physically feasible —
-        the same clearance rule A* already enforces via is_near_wall().
-        """
+        """Can the VEHICLE occupy this cell without colliding with known walls?"""
         res = SLAM_GRID_RESOLUTION
         px, py = nx * res + res // 2, ny * res + res // 2
-        m = VEHICLE_WIDTH_PX // 2 + 1
         if not free_fn(px, py):
             return False
-        for ox, oy in ((m, 0), (-m, 0), (0, m), (0, -m),
-                       (m, m), (m, -m), (-m, m), (-m, -m)):
-            if not free_fn(px + ox, py + oy):
-                return False
+        m = VEHICLE_WIDTH_PX // 2
+        for ox, oy in ((m, 0), (-m, 0), (0, m), (0, -m)):
+            cx = (px + ox) // res
+            cy = (py + oy) // res
+            if 0 <= cx < _GW and 0 <= cy < _GH:
+                if self.grid[cy, cx] > 0.3:
+                    return False
         return True
 
     def _bfs_field(self, gx: int, gy: int, free_fn):

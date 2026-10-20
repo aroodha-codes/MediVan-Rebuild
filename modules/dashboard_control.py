@@ -287,7 +287,8 @@ def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: 
     if direction == "left":
         return MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.FWD)
     if direction == "right":
-        return MotorCommand(pwm, pwm, MotorDirection.FWD, MotorDirection.REV)
+        pwm_r = max(0, min(int(pwm * 1.20), 144))
+        return MotorCommand(pwm_r, pwm_r, MotorDirection.FWD, MotorDirection.REV)
     if direction == "stop":
         return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
     raise ValueError("direction must be stop, forward, reverse, left, or right")

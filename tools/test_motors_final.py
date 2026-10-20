@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_motors_final.py -- Validates the final verified motor pins:
-  Left : [6, 5, 12]   (IN1=6,  IN2=5,  ENA=12)
-  Right: [13, 19, 18] (IN3=13, IN4=19, ENB=18)
+  Left : [5, 6, 12]   (IN1=5,  IN2=6,  ENA=12)
+  Right: [19, 13, 18] (IN3=19, IN4=13, ENB=18)
 """
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ except ImportError:
     sys.exit(1)
 
 # Final verified configuration:
-LEFT_IN1, LEFT_IN2, LEFT_ENA = 6, 5, 12
-RIGHT_IN3, RIGHT_IN4, RIGHT_ENB = 13, 19, 18
+LEFT_IN1, LEFT_IN2, LEFT_ENA = 5, 6, 12
+RIGHT_IN3, RIGHT_IN4, RIGHT_ENB = 19, 13, 18
 
 PWM_SPEED = 0.55  # 55% PWM for smooth ground driving
 RUN_TIME = 5.0
@@ -69,9 +69,10 @@ try:
     stop_all(); time.sleep(1.5)
 
     # ── Test 4: Pivot Turn Right ────────────────────────
-    print("\n[4/4] PIVOT TURN RIGHT (5s)... (Robot rotates clockwise)")
-    left_in1.on(); left_in2.off(); left_ena.value = PWM_SPEED
-    right_in3.off(); right_in4.on(); right_enb.value = PWM_SPEED
+    print("\n[4/4] PIVOT TURN RIGHT (5s)... (Robot rotates clockwise with boosted torque)")
+    turn_right_speed = min(1.0, PWM_SPEED * 1.25)
+    left_in1.on(); left_in2.off(); left_ena.value = turn_right_speed
+    right_in3.off(); right_in4.on(); right_enb.value = turn_right_speed
     countdown("TURN RIGHT", RUN_TIME)
     stop_all()
 
