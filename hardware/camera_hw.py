@@ -68,6 +68,8 @@ class CameraHW:
         self.available: bool = self._source is not None
         self.backend: str = self._source.name if self._source else "none"
         self._read_failures = 0
+        self._frame_count: int = 0
+        self._cached_obstacles: List[ObstacleResult] = []
 
         if self.available:
             print(f"[Hardware] Pi Camera initialized via {self.backend}.")
@@ -133,8 +135,11 @@ class CameraHW:
         if frame is None:
             return [], None, None
 
-        # 1. AI obstacle detection (YOLOv8n ONNX, or heuristic fallback)
-        obstacles = self.detector.detect(frame)
+        # 1. AI obstacle detection (YOLOv8n ONNX throttled to every 3rd frame to sustain 15+ FPS)
+        self._frame_count += 1
+        if self._frame_count % 3 == 1 or not self._cached_obstacles:
+            self._cached_obstacles = self.detector.detect(frame)
+        obstacles = self._cached_obstacles
 
         # 2. ArUco dock marker -- only when asked, since it costs CPU
         dock_result: Optional[DockResult] = None

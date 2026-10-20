@@ -70,8 +70,8 @@ WINDOWS_CAMERA_INDEX: int = 0
 PIN_MOTOR_ENA: int = 12                    # Left PWM
 PIN_MOTOR_IN1: int = 6                     # Left direction Forward (GPIO6)
 PIN_MOTOR_IN2: int = 5                     # Left direction Reverse (GPIO5)
-PIN_MOTOR_IN3: int = 19                    # Right direction Forward (GPIO19)
-PIN_MOTOR_IN4: int = 13                    # Right direction Reverse (GPIO13)
+PIN_MOTOR_IN3: int = 13                    # Right direction Forward (GPIO13)
+PIN_MOTOR_IN4: int = 19                    # Right direction Reverse (GPIO19)
 PIN_MOTOR_ENB: int = 18                    # Right PWM
 
 # I2C (IMU / ADC)

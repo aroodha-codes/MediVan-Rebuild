@@ -288,14 +288,14 @@
     <label class="switch"><input type="checkbox" id="manualMode"><span>Manual driving</span></label>
     <p class="note" id="manualDriveStatus" aria-live="polite">Controller status: waiting for live robot telemetry.</p>
     <div class="drive-pad" aria-label="Hold a direction to drive manually" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
-      <button class="btn" style="grid-column:2" type="button" data-drive="forward" aria-label="Drive forward">▲</button>
+      <button class="btn btn--primary" style="grid-column:2; font-weight:bold; font-size:14px; padding:10px 0;" type="button" data-drive="forward" aria-label="Drive forward">▲ FWD</button>
       <div class="drive-pad__middle" style="grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
-        <button class="btn" type="button" data-drive="left" aria-label="Turn left">◀</button>
-        <button class="btn" type="button" data-drive="stop" aria-label="Stop driving">■</button>
-        <button class="btn" type="button" data-drive="right" aria-label="Turn right">▶</button>
+        <button class="btn btn--primary" style="font-weight:bold; font-size:13px; padding:10px 0;" type="button" data-drive="left" aria-label="Turn left">◀ LEFT</button>
+        <button class="btn btn--stop" style="font-weight:bold; font-size:13px; padding:10px 0;" type="button" data-drive="stop" aria-label="Stop driving">■ STOP</button>
+        <button class="btn btn--primary" style="font-weight:bold; font-size:13px; padding:10px 0;" type="button" data-drive="right" aria-label="Turn right">▶ RIGHT</button>
       </div>
-      <button class="btn" style="grid-column:2" type="button" data-drive="reverse" aria-label="Drive reverse">▼</button>
-      <p class="note" style="grid-column:1/-1">Press and hold a direction; releasing or losing browser focus sends stop. Manual mode is mutually exclusive with autonomous Start/Resume.</p>
+      <button class="btn btn--primary" style="grid-column:2; font-weight:bold; font-size:14px; padding:10px 0;" type="button" data-drive="reverse" aria-label="Drive reverse">▼ REV</button>
+      <p class="note" style="grid-column:1/-1">Drive with mouse buttons or <strong>W/A/S/D / Arrow keys</strong> on keyboard. Release key/mouse to stop.</p>
     </div>
     <button class="btn btn--stop" data-cmd="estop">Emergency stop</button>
     <button class="btn" data-cmd="rearm" title="Clears the software E-stop latch but does not move the robot">Acknowledge E-stop / Re-arm</button>

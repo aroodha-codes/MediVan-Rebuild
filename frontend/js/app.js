@@ -473,6 +473,36 @@
     window.addEventListener('blur', stopDashboardDrive);
     document.addEventListener('visibilitychange', () => { if (document.hidden) stopDashboardDrive(); });
 
+    const KEY_DIR_MAP = {
+      ArrowUp: 'forward', KeyW: 'forward',
+      ArrowDown: 'reverse', KeyS: 'reverse',
+      ArrowLeft: 'left', KeyA: 'left',
+      ArrowRight: 'right', KeyD: 'right',
+      Space: 'stop',
+    };
+    window.addEventListener('keydown', e => {
+      if (!$('#manualMode').checked || API.source !== 'http') return;
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+      const dir = KEY_DIR_MAP[e.code];
+      if (!dir) return;
+      e.preventDefault();
+      if (dashboardDriveDirection === dir) return;
+      if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
+      dashboardDriveDirection = dir;
+      sendDashboardDrive(dashboardDriveDirection);
+      dashboardDriveTimer = setInterval(() => {
+        if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
+      }, 140);
+    });
+    window.addEventListener('keyup', e => {
+      if (!$('#manualMode').checked || API.source !== 'http') return;
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+      const dir = KEY_DIR_MAP[e.code];
+      if (dir && dashboardDriveDirection === dir) {
+        stopDashboardDrive();
+      }
+    });
+
     $$('#tgPath,#tgFrontier,#tgTrail').forEach(t => t.addEventListener('change', drawMap));
 
     $('#mDest').addEventListener('change', () => {

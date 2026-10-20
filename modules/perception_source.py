@@ -390,14 +390,10 @@ class CameraPerceptionSource(PerceptionSource):
         as an obstacle at max range.
         """
         h, w = mask.shape
-        out = np.full(w, -1, dtype=np.int32)
-        for u in range(w):
-            col = mask[:, u]
-            v = h - 1
-            while v >= 0 and col[v]:
-                v -= 1
-            out[u] = v          # -1 when the column is floor throughout
-        return out
+        not_floor = ~mask[::-1, :]
+        has_obstacle = not_floor.any(axis=0)
+        idx_from_bottom = not_floor.argmax(axis=0)
+        return np.where(has_obstacle, (h - 1) - idx_from_bottom, -1).astype(np.int32)
 
     # -- stage 5 ---------------------------------------------------
 

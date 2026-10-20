@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_motors_final.py -- Validates the final verified motor pins:
   Left : [6, 5, 12]   (IN1=6,  IN2=5,  ENA=12)
-  Right: [19, 13, 18] (IN3=19, IN4=13, ENB=18)
+  Right: [13, 19, 18] (IN3=13, IN4=19, ENB=18)
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ except ImportError:
 
 # Final verified configuration:
 LEFT_IN1, LEFT_IN2, LEFT_ENA = 6, 5, 12
-RIGHT_IN3, RIGHT_IN4, RIGHT_ENB = 19, 13, 18
+RIGHT_IN3, RIGHT_IN4, RIGHT_ENB = 13, 19, 18
 
 PWM_SPEED = 0.55  # 55% PWM for smooth ground driving
 RUN_TIME = 5.0
