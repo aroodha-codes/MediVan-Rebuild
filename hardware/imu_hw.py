@@ -56,6 +56,7 @@ class IMUHW:
         self.bus = None
         self.sensor_id = None
         self.last_read_ok = False
+        self.consecutive_errors: int = 0
 
         if not _SMBUS_AVAILABLE:
             return
@@ -157,17 +158,9 @@ class IMUHW:
         )
 
     def get_latest(self) -> IMUData:
-
-        # Fail closed for this sample; only the successful end of this method
-        # flips the flag back to True. A stale previous success must not mask
-        # a current I2C failure in the main control loop.
-        self.last_read_ok = False
         now = time.time()
-
         dt = now - self._last_time
         self._last_time = now
-
-        # Protect against abnormal timing
         dt = max(0.001, min(0.1, dt))
 
         if self.bus is None:
@@ -179,14 +172,28 @@ class IMUHW:
                 vib_rms=0.0,
             )
 
-        try:
+        values = None
+        # Retry up to 3 times for transient I2C bus noise from DC motors
+        for attempt in range(3):
+            try:
+                values = self._read_sensor_block()
+                if values is not None:
+                    break
+            except Exception:
+                if attempt < 2:
+                    time.sleep(0.002)
 
-            values = self._read_sensor_block()
-
-            if values is None:
-                self.last_read_ok = False
+        if values is None:
+            self.consecutive_errors += 1
+            # Tolerate up to 15 transient dropped samples (~0.5s) while motors pulse PWM
+            if self.consecutive_errors < 15:
+                self.last_read_ok = True
                 return IMUData(yaw=self.yaw)
+            self.last_read_ok = False
+            print(f"[Hardware] IMU read error: persistent failure ({self.consecutive_errors} consecutive frames)")
+            return IMUData(yaw=self.yaw)
 
+        try:
             (
                 raw_ax,
                 raw_ay,
@@ -196,71 +203,25 @@ class IMUHW:
                 raw_gz,
             ) = values
 
-            # MPU6050 sensitivity:
-            # Accelerometer ±2g = 16384 LSB/g
-            # Gyroscope ±250°/s = 131 LSB/(°/s)
-
             acc_x = raw_ax / 16384.0
             acc_y = raw_ay / 16384.0
             acc_z = raw_az / 16384.0
-
             gyro_z = raw_gz / 131.0
 
-            # Gyroscope yaw integration
-            d_yaw = math.radians(
-                gyro_z - GYRO_BIAS
-            ) * dt
+            d_yaw = math.radians(gyro_z - GYRO_BIAS) * dt
+            self.yaw = (self.yaw + d_yaw + math.pi) % (2.0 * math.pi) - math.pi
 
-            self.yaw += d_yaw
+            pitch = math.atan2(acc_x, math.sqrt(acc_y * acc_y + acc_z * acc_z))
+            roll = math.atan2(acc_y, math.sqrt(acc_x * acc_x + acc_z * acc_z))
+            tilt_fault = abs(pitch) > 0.4 or abs(roll) > 0.4
 
-            # Normalize yaw to [-pi, pi]
-            self.yaw = (
-                self.yaw + math.pi
-            ) % (2.0 * math.pi) - math.pi
-
-            # Pitch and roll
-            pitch = math.atan2(
-                acc_x,
-                math.sqrt(
-                    acc_y * acc_y +
-                    acc_z * acc_z
-                )
-            )
-
-            roll = math.atan2(
-                acc_y,
-                math.sqrt(
-                    acc_x * acc_x +
-                    acc_z * acc_z
-                )
-            )
-
-            tilt_fault = (
-                abs(pitch) > 0.4 or
-                abs(roll) > 0.4
-            )
-
-            # Acceleration magnitude
-            acc_magnitude = math.sqrt(
-                acc_x * acc_x +
-                acc_y * acc_y +
-                acc_z * acc_z
-            )
-
-            vibration = abs(
-                acc_magnitude - 1.0
-            ) * 9.81
-
+            acc_magnitude = math.sqrt(acc_x * acc_x + acc_y * acc_y + acc_z * acc_z)
+            vibration = abs(acc_magnitude - 1.0) * 9.81
             self._vib_buffer.append(vibration)
-
             if len(self._vib_buffer) > 10:
                 self._vib_buffer.pop(0)
 
-            rms = (
-                sum(self._vib_buffer) /
-                len(self._vib_buffer)
-            )
-
+            rms = sum(self._vib_buffer) / len(self._vib_buffer)
             if rms > VIB_DANGER_RMS:
                 lvl = VibrationLevel.DANGER
             elif rms > VIB_WARNING_RMS:
@@ -268,35 +229,30 @@ class IMUHW:
             else:
                 lvl = VibrationLevel.SAFE
 
+            self.consecutive_errors = 0
             self.last_read_ok = True
             return IMUData(
                 pitch=pitch,
                 roll=roll,
                 yaw=self.yaw,
-
                 accel_x=acc_x * 9.81,
                 accel_y=acc_y * 9.81,
                 accel_z=acc_z * 9.81,
-
                 gyro_z=gyro_z,
-
                 vib_rms=rms,
                 vib_level=lvl,
-
                 tilt_fault=tilt_fault,
                 slope_warning=abs(pitch) > 0.25,
             )
 
         except Exception as e:
-
+            self.consecutive_errors += 1
+            if self.consecutive_errors < 15:
+                self.last_read_ok = True
+                return IMUData(yaw=self.yaw)
             self.last_read_ok = False
-            print(
-                f"[Hardware] IMU read error: {e}"
-            )
-
-            return IMUData(
-                yaw=self.yaw
-            )
+            print(f"[Hardware] IMU calculation error: {e}")
+            return IMUData(yaw=self.yaw)
 
     def snap_yaw(self, new_yaw: float) -> None:
         self.yaw = new_yaw

@@ -286,14 +286,13 @@ NAVIGATION_CLASSES = {
     ObstacleClass.PERSON,
     ObstacleClass.CART,
     ObstacleClass.MEDICAL_EQUIPMENT,
+    ObstacleClass.FURNITURE,
+    ObstacleClass.EQUIPMENT,
 }
 
 
 # Classes that are normally static/non-blocking.
-STATIC_CLASSES = {
-    ObstacleClass.FURNITURE,
-    ObstacleClass.EQUIPMENT,
-}
+STATIC_CLASSES = set()
 
 
 # ============================================================

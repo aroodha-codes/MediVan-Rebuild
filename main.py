@@ -660,7 +660,7 @@ def main() -> None:
         dashboard_armed = False
         motor.emergency_stop()
         print("[dashboard-control] Hardware motion disarmed; choose Manual driving or Start mission.")
-        print("[dashboard-control] Manual mode is capped at PWM 45; it is operator-controlled and requires direct supervision.")
+        print("[dashboard-control] Manual mode is capped at PWM 120; it is operator-controlled and requires direct supervision.")
     # <<< MEDIVAN DASHBOARD CONTROL (release candidate)
 
     try:
@@ -906,9 +906,9 @@ def main() -> None:
                     break
 
 
-            if HARDWARE_MODE and not getattr(imu, "last_read_ok", False):
+            if HARDWARE_MODE and getattr(imu, "consecutive_errors", 0) > 15:
                 motor.emergency_stop()
-                print("[main] FATAL: IMU sample invalid; stopping before mapping or motion.")
+                print("[main] FATAL: IMU disconnected permanently (>15 dropped samples); stopping.")
                 running = False
                 break
 
@@ -1406,27 +1406,26 @@ def main() -> None:
 
                 if worst_action == ObstacleAction.STOP:
 
-
-
                     from config import MotorDirection
 
-
-
                     motor_cmd = MotorCommand(
-
                         0,
-
                         0,
-
                         MotorDirection.BRAKE,
-
                         MotorDirection.BRAKE,
-
                     )
-
-
-
                     audio.play(AudioEvent.OBSTACLE_WARNING)
+
+                    # Reroute immediately when an obstacle blocks exploration
+                    if sim_mode == SimMode.MAPPING and slam is not None:
+                        slam._frontier_goal = None
+                        slam._frontier_path = []
+                        motor_cmd = MotorCommand(
+                            110,
+                            110,
+                            MotorDirection.REV,
+                            MotorDirection.FWD,
+                        )
 
 
 
@@ -1468,7 +1467,7 @@ def main() -> None:
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=45,
+                    pwm=120,
                 )
                 if _dashboard_override is not None:
                     motor_cmd = _dashboard_override

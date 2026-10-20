@@ -362,7 +362,7 @@ class PathPlanner:
             # 1. Confidence filter
             # --------------------------------------------------
 
-            if obs.confidence < 0.65:
+            if obs.confidence < 0.40:
                 continue
 
             # --------------------------------------------------
@@ -391,7 +391,7 @@ class PathPlanner:
             # 0.0 = far
             # 1.0 = very close
             #
-            if obs.proximity < 0.55:
+            if obs.proximity < 0.35:
                 continue
 
             # --------------------------------------------------
