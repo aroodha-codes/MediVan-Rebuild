@@ -1272,27 +1272,33 @@ def main() -> None:
 
             try:
 
-                # Dynamic obstacle blocking
+                # Dynamic obstacle blocking.
+                # During active hardware delivery/return we deliberately do NOT let
+                # set_dynamic_obstacles() drive needs_replan.  The planner already has
+                # a valid SLAM path; a single YOLO frame that happens to cross a
+                # waypoint cell should not cascade into a full replan → abort loop.
+                # The obstacle cells are still written into _dynamic_blocked so that
+                # follow_path() can slow / pause for that tick — but the path itself
+                # is preserved.  Replanning during delivery is driven only by the
+                # deviation-check below (genuine off-path condition).
+                if HARDWARE_MODE and physical_mission_phase in ("DELIVER", "RETURN"):
+                    _obs_blocks_path = planner.set_dynamic_obstacles(
+                        obstacles, motor.x, motor.y, motor.theta)
+                    # Do NOT set needs_replan from obstacle; just note it for follow_path.
+                else:
+                    needs_replan = planner.set_dynamic_obstacles(
+                        obstacles, motor.x, motor.y, motor.theta)
 
-                needs_replan = planner.set_dynamic_obstacles(
-
-                    obstacles, motor.x, motor.y, motor.theta)
-
-
-
-                # Deviation check
-
+                # Deviation check — genuine off-path, always triggers replan.
                 if planner.check_deviation(vehicle_state):
-
                     needs_replan = True
-
-
 
                 if HARDWARE_MODE and physical_mission_phase in ("DELIVER", "RETURN"):
                     # Physical planning uses observed SLAM free space only.
                     if planner.path_complete:
                         if physical_mission_phase == "DELIVER":
                             physical_mission_phase = "RETURN"
+                            sim_mode = SimMode.NAVIGATION   # keep exploration suppressed
                             goal = physical_mission_start
                             needs_replan = True
                             hud.set_alert("TARGET REACHED — RETURNING TO START", 3.0)
@@ -1304,6 +1310,7 @@ def main() -> None:
                             print("[main] DELIVERY TARGET REACHED; physical payload transfer requires manual confirmation; returning to start")
                         elif physical_mission_phase == "RETURN":
                             physical_mission_phase = "STOP"
+                            sim_mode = SimMode.READY        # prevent exploration re-entry
                             motor.emergency_stop()
                             dashboard_armed = False
                             dashboard_control_state.add_event("success", "Return to start complete", "Motors stopped. Precision ArUco docking is not integrated.")
@@ -1322,6 +1329,7 @@ def main() -> None:
                                 if not planner.path or planner.path_complete:
                                     print(f"[main] BLOCKED: no known-free SLAM path for {physical_mission_phase}; stopping")
                                     physical_mission_phase = "STOP"
+                                    sim_mode = SimMode.READY    # prevent exploration re-entry
                                     motor.emergency_stop()
                                     dashboard_armed = False
                     else:
