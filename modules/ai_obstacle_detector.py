@@ -286,18 +286,21 @@ def _get_project_class(name: str):
     return ObstacleClass.UNKNOWN
 
 
-# Classes that should be allowed to influence navigation.
+# Dynamic classes that should be allowed to influence real-time emergency braking.
+# Only moving/hazard obstacles like people and carts trigger emergency stopping.
 NAVIGATION_CLASSES = {
     ObstacleClass.PERSON,
     ObstacleClass.CART,
-    ObstacleClass.MEDICAL_EQUIPMENT,
-    ObstacleClass.FURNITURE,
-    ObstacleClass.EQUIPMENT,
 }
 
 
-# Classes that are normally static/non-blocking.
-STATIC_CLASSES = set()
+# Classes that are static/room scenery (mapped into SLAM occupancy grid instead).
+STATIC_CLASSES = {
+    ObstacleClass.FURNITURE,
+    ObstacleClass.EQUIPMENT,
+    ObstacleClass.MEDICAL_EQUIPMENT,
+    ObstacleClass.UNKNOWN,
+}
 
 
 # ============================================================

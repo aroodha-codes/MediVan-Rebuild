@@ -93,3 +93,63 @@ def test_path_deviation_threshold_allows_normal_pursuit():
     state_far = VehicleState(x=450.0, y=290.0, theta=0.0)
     assert planner.check_deviation(state_far)
 
+
+def test_static_furniture_ignored_by_detector():
+    from modules.ai_obstacle_detector import AIObstacleDetector, ObstacleClass, ObstacleAction
+
+    det = AIObstacleDetector()
+    frame_shape = (240, 320, 3)
+
+    # Static furniture (chairs, desks) resting on floor (proximity = 0.85) should be NOMINAL
+    action_chair = det._calculate_action(
+        ObstacleClass.FURNITURE, confidence=0.80, bbox=(120, 80, 80, 120),
+        proximity=0.85, frame_shape=frame_shape
+    )
+    assert action_chair == ObstacleAction.NOMINAL
+
+    # Static equipment (laptop, monitor) should be NOMINAL
+    action_equip = det._calculate_action(
+        ObstacleClass.EQUIPMENT, confidence=0.80, bbox=(120, 80, 80, 120),
+        proximity=0.85, frame_shape=frame_shape
+    )
+    assert action_equip == ObstacleAction.NOMINAL
+
+
+def test_set_dynamic_obstacles_blocks_only_close_person_stop():
+    from modules.path_planner import PathPlanner
+    from config import ObstacleResult, ObstacleClass, ObstacleAction
+
+    planner = PathPlanner()
+    # Path heading forward along x
+    planner.path = [(400, 300), (420, 300), (440, 300), (460, 300)]
+    planner.path_index = 0
+
+    # 1. Furniture with STOP action -> ignored
+    obs_chair = ObstacleResult(
+        classification=ObstacleClass.FURNITURE, action=ObstacleAction.STOP,
+        proximity=0.85, bbox=(120, 80, 80, 100), confidence=0.80
+    )
+    assert not planner.set_dynamic_obstacles([obs_chair], 400.0, 300.0, 0.0)
+
+    # 2. Person with SLOW action -> does NOT block path
+    obs_slow = ObstacleResult(
+        classification=ObstacleClass.PERSON, action=ObstacleAction.SLOW,
+        proximity=0.60, bbox=(120, 80, 80, 100), confidence=0.80
+    )
+    assert not planner.set_dynamic_obstacles([obs_slow], 400.0, 300.0, 0.0)
+
+    # 3. Distant person with STOP action (proximity < 0.65) -> does NOT block path
+    obs_far = ObstacleResult(
+        classification=ObstacleClass.PERSON, action=ObstacleAction.STOP,
+        proximity=0.50, bbox=(120, 80, 80, 100), confidence=0.80
+    )
+    assert not planner.set_dynamic_obstacles([obs_far], 400.0, 300.0, 0.0)
+
+    # 4. Confirmed close person with STOP action in front -> blocks path
+    obs_person = ObstacleResult(
+        classification=ObstacleClass.PERSON, action=ObstacleAction.STOP,
+        proximity=0.75, bbox=(140, 80, 40, 100), confidence=0.80
+    )
+    assert planner.set_dynamic_obstacles([obs_person], 400.0, 300.0, 0.0)
+
+

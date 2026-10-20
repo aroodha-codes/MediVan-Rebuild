@@ -57,6 +57,7 @@ from config import (
     VehicleState,
     ObstacleResult,
     ObstacleAction,
+    ObstacleClass,
     JunctionAction,
 )
 
@@ -359,39 +360,41 @@ class PathPlanner:
         for obs in obstacles:
 
             # --------------------------------------------------
-            # 1. Confidence filter
+            # 1. Classification filter: only dynamic moving obstacles
             # --------------------------------------------------
 
-            if obs.confidence < 0.40:
-                continue
-
-            # --------------------------------------------------
-            # 2. Action filter
-            # --------------------------------------------------
-
-            if obs.action not in (
-                ObstacleAction.STOP,
-                ObstacleAction.SLOW,
+            if getattr(obs, "classification", None) not in (
+                ObstacleClass.PERSON,
+                ObstacleClass.CART,
             ):
                 continue
 
             # --------------------------------------------------
-            # 3. Driving corridor filter
+            # 2. Confidence filter
+            # --------------------------------------------------
+
+            if obs.confidence < 0.45:
+                continue
+
+            # --------------------------------------------------
+            # 3. Action filter: only emergency STOP blocks cells
+            # --------------------------------------------------
+
+            if obs.action != ObstacleAction.STOP:
+                continue
+
+            # --------------------------------------------------
+            # 4. Driving corridor filter
             # --------------------------------------------------
 
             if not self._object_in_driving_corridor(obs):
                 continue
 
             # --------------------------------------------------
-            # 4. Distance / proximity filter
+            # 5. Distance / proximity filter: close collision hazard
             # --------------------------------------------------
 
-            # proximity is approximately:
-            #
-            # 0.0 = far
-            # 1.0 = very close
-            #
-            if obs.proximity < 0.35:
+            if obs.proximity < 0.65:
                 continue
 
             # --------------------------------------------------

@@ -629,6 +629,7 @@ def main() -> None:
     dashboard_last_drive_log = None
     dashboard_manual_blocked_last = False
     dashboard_publish_errors = 0
+    persistent_obstacle_stop_ticks = 0
 
     # A monitor is useful on simulation or hardware; writes are enabled only
     # on physical mode and only by the isolated port-5001 server.
@@ -1466,27 +1467,22 @@ def main() -> None:
                         MotorDirection.BRAKE,
                     )
                     audio.play(AudioEvent.OBSTACLE_WARNING)
+                    persistent_obstacle_stop_ticks += 1
 
-                    # Reroute immediately when an obstacle blocks exploration
-                    if sim_mode == SimMode.MAPPING and slam is not None:
+                    # Only abandon frontier goal if an obstacle blocks continuously for ~5 seconds (50 ticks)
+                    if persistent_obstacle_stop_ticks > 50 and sim_mode == SimMode.MAPPING and slam is not None:
                         slam._frontier_goal = None
                         slam._frontier_path = []
-                        motor_cmd = MotorCommand(
-                            135,
-                            135,
-                            MotorDirection.REV,
-                            MotorDirection.FWD,
-                        )
-
-
+                        persistent_obstacle_stop_ticks = 0
 
                 elif worst_action == ObstacleAction.SLOW:
 
-
-
+                    persistent_obstacle_stop_ticks = 0
                     motor_cmd.pwm_a = int(motor_cmd.pwm_a * 0.4)
-
                     motor_cmd.pwm_b = int(motor_cmd.pwm_b * 0.4)
+
+                else:
+                    persistent_obstacle_stop_ticks = 0
 
 
 
