@@ -67,12 +67,12 @@ WINDOWS_CAMERA_INDEX: int = 0
 # log. Do not switch to a generic GPIO/PWM diagram without physically rewiring
 # and revalidating the chassis. gpiozero may use software PWM depending on the
 # selected GPIO factory; independent duty-cycle behaviour must be bench-tested.
-PIN_MOTOR_ENA: int = 12                    # Left PWM
-PIN_MOTOR_IN1: int = 5                     # Left direction Forward (GPIO5)
-PIN_MOTOR_IN2: int = 6                     # Left direction Reverse (GPIO6)
-PIN_MOTOR_IN3: int = 19                    # Right direction Forward (GPIO19)
-PIN_MOTOR_IN4: int = 13                    # Right direction Reverse (GPIO13)
-PIN_MOTOR_ENB: int = 18                    # Right PWM
+PIN_MOTOR_ENA: int = 18                    # Left PWM
+PIN_MOTOR_IN1: int = 19                    # Left direction Forward (GPIO19)
+PIN_MOTOR_IN2: int = 13                    # Left direction Reverse (GPIO13)
+PIN_MOTOR_IN3: int = 5                     # Right direction Forward (GPIO5)
+PIN_MOTOR_IN4: int = 6                     # Right direction Reverse (GPIO6)
+PIN_MOTOR_ENB: int = 12                    # Right PWM
 
 # I2C (IMU / ADC)
 PIN_I2C_SDA: int = 2
