@@ -332,7 +332,7 @@ class SLAMEngine:
                 self._frontier_path = []
                 turn_pwm = min(160, int(base_pwm * 1.25))
                 return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.REV, MotorDirection.FWD)
+                                    MotorDirection.FWD, MotorDirection.REV)
 
         # ── advance the waypoint cursor ──────────────────────────────────
         while self._frontier_idx < len(self._frontier_path):
@@ -347,7 +347,7 @@ class SLAMEngine:
             self._frontier_goal = None
             turn_pwm = min(160, int(base_pwm * 1.25))
             return MotorCommand(turn_pwm, turn_pwm,
-                                MotorDirection.REV, MotorDirection.FWD)
+                                MotorDirection.FWD, MotorDirection.REV)
 
         wx, wy = self._frontier_path[self._frontier_idx]
         tx, ty = wx * res + res // 2, wy * res + res // 2
@@ -359,14 +359,14 @@ class SLAMEngine:
 
         if abs(err) > 0.55:
             # Large error -> pivot in place
-            if err < 0:
+            if err > 0:
                 # Pivot left
                 return MotorCommand(base_pwm, base_pwm,
-                                    MotorDirection.FWD, MotorDirection.REV)
+                                    MotorDirection.REV, MotorDirection.FWD)
             # Pivot right -> boosted rotation torque
             turn_right_pwm = min(160, int(base_pwm * 1.25))
             return MotorCommand(turn_right_pwm, turn_right_pwm,
-                                MotorDirection.REV, MotorDirection.FWD)
+                                MotorDirection.FWD, MotorDirection.REV)
 
         # Small error -> drive forward with a differential correction.
         corr = int(max(-0.6, min(0.6, err * 1.2)) * base_pwm)
