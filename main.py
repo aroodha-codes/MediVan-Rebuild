@@ -660,7 +660,7 @@ def main() -> None:
         dashboard_armed = False
         motor.emergency_stop()
         print("[dashboard-control] Hardware motion disarmed; choose Manual driving or Start mission.")
-        print("[dashboard-control] Manual mode is capped at PWM 120; it is operator-controlled and requires direct supervision.")
+        print("[dashboard-control] Manual mode is capped at PWM 140; it is operator-controlled and requires direct supervision.")
     # <<< MEDIVAN DASHBOARD CONTROL (release candidate)
 
     try:
@@ -751,6 +751,25 @@ def main() -> None:
                         dashboard_armed = True
                         motor.mode = DriveMode.AUTONOMOUS
                         print(f"[dashboard-control] Armed; command={_dash_name} phase={physical_mission_phase}")
+
+                    elif _dash_name in ("finish-explore", "save-map"):
+                        dashboard_armed = False
+                        dashboard_control_state.set_drive("stop")
+                        motor.emergency_stop()
+                        if HARDWARE_MODE and slam is not None:
+                            slam.mapping_complete = True
+                            try:
+                                slam.save_map("output/slam_map.png")
+                            except Exception as _e:
+                                print(f"[main] Failed saving SLAM map: {_e}")
+                            physical_mission_phase = "READY"
+                            sim_mode = SimMode.READY
+                            planner.path = []
+                            dashboard_control_state.add_event(
+                                "success", "Map Saved & Verified",
+                                "Exploration complete. Click a delivery target on the Live Map to dispatch."
+                            )
+                            print("[main] SLAM exploration finished by operator. Map saved. Ready for delivery.")
 
                     elif _dash_name == "reset":
                         dashboard_armed = False
@@ -1132,7 +1151,7 @@ def main() -> None:
                     if slam.mapping_complete and (not HARDWARE_MODE or
                                                   (dashboard_armed and motor.mode == DriveMode.AUTONOMOUS)):
 
-                        if HARDWARE_MODE and physical_mission_phase == "EXPLORE":
+                        if HARDWARE_MODE and physical_mission_phase in ("EXPLORE", "READY"):
                             slam.save_map()
                             if dashboard_active_mission_id is None:
                                 # Exploration is a separately observable phase. Do not invent a
@@ -1147,14 +1166,29 @@ def main() -> None:
                                 if dashboard_mission_target is not None:
                                     candidate = (int(dashboard_mission_target[0]), int(dashboard_mission_target[1]))
                                     _cost_fn, _free_fn, _near_wall_fn, _grid_fn = planner_callbacks(slam)
-                                    physical_mission_goal = candidate if _free_fn(*candidate) else None
+                                    if _free_fn(*candidate):
+                                        physical_mission_goal = candidate
+                                    else:
+                                        # Snap to nearest free cell within 25 px
+                                        best_free = None
+                                        best_d = 999
+                                        res = SLAM_GRID_RESOLUTION
+                                        for dx in range(-25, 26, res):
+                                            for dy in range(-25, 26, res):
+                                                nx, ny = candidate[0] + dx, candidate[1] + dy
+                                                if _free_fn(nx, ny):
+                                                    d = math.hypot(dx, dy)
+                                                    if d < best_d:
+                                                        best_d = d
+                                                        best_free = (nx, ny)
+                                        physical_mission_goal = best_free
                                     if physical_mission_goal is None:
-                                        _why = "Selected map target is not known-free with chassis clearance."
+                                        _why = "Selected map target is not in explored free space."
                                 else:
                                     physical_mission_goal = select_reachable_destination(slam, motor.x, motor.y)
                                     _why = "No sufficiently distant reachable known-free target." if physical_mission_goal is None else ""
                                 if physical_mission_goal is not None and math.hypot(
-                                        physical_mission_goal[0] - motor.x, physical_mission_goal[1] - motor.y) < 50:
+                                        physical_mission_goal[0] - motor.x, physical_mission_goal[1] - motor.y) < 20:
                                     physical_mission_goal = None
                                     _why = "Delivery target is too close to the current pose."
                                 if physical_mission_goal is None:
@@ -1423,8 +1457,8 @@ def main() -> None:
                         slam._frontier_goal = None
                         slam._frontier_path = []
                         motor_cmd = MotorCommand(
-                            110,
-                            110,
+                            135,
+                            135,
                             MotorDirection.REV,
                             MotorDirection.FWD,
                         )
@@ -1469,7 +1503,7 @@ def main() -> None:
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=120,
+                    pwm=140,
                 )
                 if _dashboard_override is not None:
                     motor_cmd = _dashboard_override

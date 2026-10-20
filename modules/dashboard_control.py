@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 _ALLOWED_COMMANDS = {
     "start", "explore", "mission", "pause", "resume", "manual", "auto",
     "dock", "reset", "estop", "rearm", "mission-remove", "mission-promote",
+    "finish-explore", "save-map",
 }
 _ALLOWED_DIRECTIONS = {"stop", "forward", "reverse", "left", "right"}
 _MANUAL_DEADMAN_S = 0.40
@@ -81,6 +82,11 @@ class DashboardCommandState:
                 self._armed = False
                 self._mode = "disarmed"
                 self._set_drive_unlocked("stop")
+            elif name in ("finish-explore", "save-map"):
+                self._armed = False
+                self._mode = "disarmed"
+                self._set_drive_unlocked("stop")
+                self._event_unlocked("info", "Exploration finished", "Map saved. Ready for delivery.")
             elif name == "reset":
                 self._armed = False
                 self._mode = "disarmed"
@@ -264,7 +270,7 @@ class DashboardCommandState:
             return [dict(e) for e in self._events]
 
 
-def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: bool = False):
+def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: bool = False, max_pwm: int = 120):
     """Convert a held dashboard direction into a bounded motor command.
 
     ``obstacle_stop`` remains available for callers that have a validated stop
@@ -277,7 +283,7 @@ def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: 
     from config import MotorCommand, MotorDirection
 
     direction = str(direction).lower().strip()
-    pwm = max(0, min(int(pwm), 120))
+    pwm = max(0, min(int(pwm), int(max_pwm)))
     if obstacle_stop and direction != "stop":
         direction = "stop"
     if direction == "forward":
@@ -287,7 +293,7 @@ def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: 
     if direction == "left":
         return MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.FWD)
     if direction == "right":
-        pwm_r = max(0, min(int(pwm * 1.20), 144))
+        pwm_r = max(0, min(int(pwm * 1.20), int(max_pwm * 1.20)))
         return MotorCommand(pwm_r, pwm_r, MotorDirection.FWD, MotorDirection.REV)
     if direction == "stop":
         return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
@@ -318,7 +324,7 @@ def resolve_dashboard_motor_command(
         return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE), "stop (disarmed)"
     if manual_mode:
         direction = state.current_drive()
-        return build_manual_motor_command(direction, pwm=pwm, obstacle_stop=False), direction
+        return build_manual_motor_command(direction, pwm=pwm, obstacle_stop=False, max_pwm=max(120, pwm)), direction
     return None, "autonomous"
 
 

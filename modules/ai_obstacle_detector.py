@@ -118,18 +118,18 @@ WIDE_CORRIDOR_RIGHT = 0.80
 # bottom of bounding box / image height
 #
 # Higher value = object appears closer.
-SLOW_PROXIMITY = 0.48
-STOP_PROXIMITY = 0.68
+SLOW_PROXIMITY = 0.62
+STOP_PROXIMITY = 0.80
 
 # Bounding-box area thresholds.
-MIN_OBJECT_AREA = 0.003
-STOP_AREA_RATIO = 0.16
-SLOW_AREA_RATIO = 0.05
+MIN_OBJECT_AREA = 0.005
+STOP_AREA_RATIO = 0.28
+SLOW_AREA_RATIO = 0.10
 
 # Temporal confirmation.
 #
 # A single bad YOLO frame will not immediately generate STOP.
-REQUIRED_STOP_CONFIRMATIONS = 2
+REQUIRED_STOP_CONFIRMATIONS = 3
 
 # Number of previous frames kept for tracking.
 HISTORY_LENGTH = 5

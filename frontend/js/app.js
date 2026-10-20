@@ -407,7 +407,7 @@
       // Ask for confirmation before mutating the UI or sending any E-stop action.
       if (cmd === 'estop' && !confirm('Request an emergency stop now?')) return;
       // A mode-changing command cancels browser teleoperation first.
-      if (['start', 'pause', 'resume', 'dock', 'reset', 'estop', 'rearm'].includes(cmd)) {
+      if (['start', 'pause', 'resume', 'dock', 'reset', 'estop', 'rearm', 'finish-explore', 'save-map'].includes(cmd)) {
         stopDashboardDrive();
         $('#manualMode').checked = false;
       }
