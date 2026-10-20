@@ -403,7 +403,7 @@ JUNCTION_SLOW_DIST_PX: int = 20
 BUMP_SLOW_DIST_PX: int = 15
 JUNCTION_CLEAR_TIME_S: float = 1.0
 JUNCTION_RECHECK_TIME_S: float = 2.0
-REPLAN_DEVIATION_PX: int = 15
+REPLAN_DEVIATION_PX: int = 40
 
 # ════════════════════════════════════════════════
 # AI OBSTACLE DETECTION (YOLOv8-Nano)

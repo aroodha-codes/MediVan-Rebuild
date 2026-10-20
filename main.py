@@ -1028,9 +1028,9 @@ def main() -> None:
 
                     enc_dtheta=enc_reading.dtheta,
 
-                    prev_gray=prev_gray,
+                    prev_gray=None if HARDWARE_MODE else prev_gray,
 
-                    curr_gray=curr_gray,
+                    curr_gray=None if HARDWARE_MODE else curr_gray,
 
 
 
@@ -1267,8 +1267,7 @@ def main() -> None:
             # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             motor_cmd = MotorCommand()
-
-
+            needs_replan = False
 
             try:
 
@@ -1325,6 +1324,7 @@ def main() -> None:
                                 is_near_wall_fn=near_wall_fn,
                                 map_width=MAP_WIDTH, map_height=MAP_HEIGHT,
                             )
+                            needs_replan = False
                             if not path:
                                 if not planner.path or planner.path_complete:
                                     print(f"[main] BLOCKED: no known-free SLAM path for {physical_mission_phase}; stopping")
@@ -1362,6 +1362,7 @@ def main() -> None:
                             map_width=map_loader.width,
                             map_height=map_loader.height,
                         )
+                        needs_replan = False
 
                     def grid_fn(x: int, y: int) -> CellType:
                         if 0 <= y < map_loader.height and 0 <= x < map_loader.width:

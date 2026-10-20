@@ -93,10 +93,10 @@ DEFAULT_MODEL_PATHS = [
 YOLO_INPUT_SIZE = 320
 
 # Minimum confidence for accepting a detection.
-MIN_CONFIDENCE = 0.45
+MIN_CONFIDENCE = 0.35
 
 # Strong confidence needed for safety decisions.
-SAFETY_CONFIDENCE = 0.65
+SAFETY_CONFIDENCE = 0.45
 
 # NMS threshold.
 NMS_THRESHOLD = 0.45
@@ -118,27 +118,23 @@ WIDE_CORRIDOR_RIGHT = 0.80
 # bottom of bounding box / image height
 #
 # Higher value = object appears closer.
-# NOTE: Raised STOP_PROXIMITY 0.80→0.87 to prevent the 320x240 camera
-#       view (which captures a lot of floor) from triggering false STOPs.
-#       The floor bounding-box bottom reaches ~0.80 easily; real obstacles
-#       that fill the lower 87 % of the frame are genuinely dangerous.
-SLOW_PROXIMITY = 0.62
-STOP_PROXIMITY = 0.87
+# Calibrated for reliable prototype demonstrations:
+# - At proximity >= 0.52 (within ~1.2m), robot smoothly slows down
+# - At proximity >= 0.72 (within ~60cm), robot safely stops
+SLOW_PROXIMITY = 0.52
+STOP_PROXIMITY = 0.72
 
 # Bounding-box area thresholds.
 MIN_OBJECT_AREA = 0.005
-# Raised STOP_AREA_RATIO 0.28→0.35: requires the obstacle bbox to cover
-# 35 % of the frame area before issuing STOP.  Floor / wall detections are
-# large but rarely centred tightly enough to cross this threshold.
-STOP_AREA_RATIO = 0.35
-SLOW_AREA_RATIO = 0.10
+STOP_AREA_RATIO = 0.16
+SLOW_AREA_RATIO = 0.08
 
 # Temporal confirmation.
 #
-# A single bad YOLO frame will not immediately generate STOP.
-# Raised 3→5 to require 5 consecutive agreeing frames — eliminates
-# single-frame floor/wall false positives during delivery navigation.
-REQUIRED_STOP_CONFIRMATIONS = 5
+# Requires 2 consecutive agreeing frames (~300ms reaction time)
+# to confirm obstacle before STOP, avoiding single-frame noise while
+# reacting quickly and responsively in front of people or hazards.
+REQUIRED_STOP_CONFIRMATIONS = 2
 
 # Number of previous frames kept for tracking.
 HISTORY_LENGTH = 5
