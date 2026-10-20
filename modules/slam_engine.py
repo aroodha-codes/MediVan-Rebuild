@@ -359,19 +359,19 @@ class SLAMEngine:
             # Large error -> pivot in place
             turn_pwm = min(150, max(120, int(base_pwm * 0.9)))
             if err > 0:
-                # Pivot left
-                return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.REV, MotorDirection.FWD)
-            # Pivot right -> boosted rotation torque
-            turn_right_pwm = min(175, int(turn_pwm * 1.25))
-            return MotorCommand(turn_right_pwm, turn_right_pwm,
-                                MotorDirection.FWD, MotorDirection.REV)
+                # Target is to the right (desired > theta): pivot right (increasing theta)
+                turn_right_pwm = min(175, int(turn_pwm * 1.25))
+                return MotorCommand(turn_right_pwm, turn_right_pwm,
+                                    MotorDirection.FWD, MotorDirection.REV)
+            # Target is to the left (desired < theta): pivot left (decreasing theta)
+            return MotorCommand(turn_pwm, turn_pwm,
+                                MotorDirection.REV, MotorDirection.FWD)
 
         # Small error -> drive forward with a differential correction.
         corr = int(max(-0.5, min(0.5, err * 1.1)) * base_pwm)
-        left = max(PWM_DEADBAND + 30, min(255, base_pwm - corr))
-        right = max(PWM_DEADBAND + 30, min(255, base_pwm + corr))
-        if err < 0:
+        left = max(PWM_DEADBAND + 30, min(255, base_pwm + corr))
+        right = max(PWM_DEADBAND + 30, min(255, base_pwm - corr))
+        if err > 0:
             left = min(255, int(left * 1.15))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)

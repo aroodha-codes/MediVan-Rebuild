@@ -917,19 +917,19 @@ class PathPlanner:
         if abs(angle_to_la) > 0.45:
             turn_pwm = min(150, max(120, int(base * 0.9)))
             if angle_to_la > 0:
-                # Pivot left
-                return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.REV, MotorDirection.FWD)
-            # Pivot right with boosted rotation torque
-            turn_right_pwm = min(175, int(turn_pwm * 1.25))
-            return MotorCommand(turn_right_pwm, turn_right_pwm,
-                                MotorDirection.FWD, MotorDirection.REV)
+                # Target is to the right (desired > theta): pivot right with boosted rotation torque
+                turn_right_pwm = min(175, int(turn_pwm * 1.25))
+                return MotorCommand(turn_right_pwm, turn_right_pwm,
+                                    MotorDirection.FWD, MotorDirection.REV)
+            # Target is to the left (desired < theta): pivot left
+            return MotorCommand(turn_pwm, turn_pwm,
+                                MotorDirection.REV, MotorDirection.FWD)
 
         # Small heading error: drive forward with proportional differential correction
         corr = int(max(-0.5, min(0.5, angle_to_la * 1.1)) * base)
-        pwm_left = max(PWM_DEADBAND + 30, min(255, base - corr))
-        pwm_right = max(PWM_DEADBAND + 30, min(255, base + corr))
-        if angle_to_la < 0:
+        pwm_left = max(PWM_DEADBAND + 30, min(255, base + corr))
+        pwm_right = max(PWM_DEADBAND + 30, min(255, base - corr))
+        if angle_to_la > 0:
             pwm_left = min(255, int(pwm_left * 1.15))
 
         return MotorCommand(

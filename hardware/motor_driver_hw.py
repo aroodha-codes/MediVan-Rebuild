@@ -153,7 +153,7 @@ class MotorDriverHW:
         self.speed_left = self._signed_speed(self.pwm_a, self.dir_a)
         self.speed_right = self._signed_speed(self.pwm_b, self.dir_b)
         self.forward_v = (self.speed_left + self.speed_right) / 2.0
-        self.angular_v = (self.speed_right - self.speed_left) / WHEEL_BASE_M
+        self.angular_v = (self.speed_left - self.speed_right) / WHEEL_BASE_M
 
     def emergency_stop(self) -> None:
         """Immediate hardware stop."""

@@ -658,10 +658,17 @@ def main() -> None:
 
     dashboard_armed = not HARDWARE_MODE
     if HARDWARE_MODE:
-        dashboard_armed = False
-        motor.emergency_stop()
-        print("[dashboard-control] Hardware motion disarmed; choose Manual driving or Start mission.")
-        print("[dashboard-control] Manual mode is capped at PWM 140; it is operator-controlled and requires direct supervision.")
+        if any(arg in sys.argv for arg in ("--start", "--arm", "-a")) or os.environ.get("MEDIVAN_AUTO_ARM") == "1":
+            dashboard_armed = True
+            if hasattr(motor, "release_emergency"):
+                motor.release_emergency()
+            print("[dashboard-control] Hardware motion ARMED via startup argument (--start). Exploration starting immediately.")
+        else:
+            dashboard_armed = False
+            motor.emergency_stop()
+            print("[dashboard-control] Hardware motion disarmed; choose Manual driving or Start mission.")
+            print("[dashboard-control] (To start immediately without opening the dashboard, use: python3 -u main.py --start)")
+            print("[dashboard-control] Manual mode is capped at PWM 140; it is operator-controlled and requires direct supervision.")
     # <<< MEDIVAN DASHBOARD CONTROL (release candidate)
 
     try:
@@ -1379,28 +1386,24 @@ def main() -> None:
                     motor_cmd = manual_cmd
 
                 elif sim_mode == SimMode.MAPPING and slam is not None:
-
-                    # Real robot explores its own occupancy grid.
-
-                    motor_cmd = slam.get_explore_command(
-
-                        motor.x,
-
-                        motor.y,
-
-                        motor.theta,
-
-                        None if HARDWARE_MODE else map_loader.is_free,
-
-                    )
-                    if frame_count % 30 == 0:
-                        print(
-                            f"[EXPLORE DEBUG] "
-                            f"left_pwm={motor_cmd.pwm_a} "
-                            f"right_pwm={motor_cmd.pwm_b} "
-                            f"left_dir={motor_cmd.dir_a} "
-                            f"right_dir={motor_cmd.dir_b}"
+                    if HARDWARE_MODE and not dashboard_armed:
+                        motor_cmd = MotorCommand()
+                    else:
+                        # Real robot explores its own occupancy grid.
+                        motor_cmd = slam.get_explore_command(
+                            motor.x,
+                            motor.y,
+                            motor.theta,
+                            None if HARDWARE_MODE else map_loader.is_free,
                         )
+                        if frame_count % 30 == 0:
+                            print(
+                                f"[EXPLORE DEBUG] "
+                                f"left_pwm={motor_cmd.pwm_a} "
+                                f"right_pwm={motor_cmd.pwm_b} "
+                                f"left_dir={motor_cmd.dir_a} "
+                                f"right_dir={motor_cmd.dir_b}"
+                            )
 
                 elif HARDWARE_MODE and physical_mission_phase in ("STOP", "READY"):
                     motor_cmd = MotorCommand()

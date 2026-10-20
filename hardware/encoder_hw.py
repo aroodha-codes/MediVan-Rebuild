@@ -66,9 +66,10 @@ class EncoderHW:
         self.left_dist_m += d_left
         self.right_dist_m += d_right
 
-        # Kinematics
+        # Kinematics: in screen coordinates (Y down), turning right (left wheel faster)
+        # rotates clockwise, increasing heading theta. Turning left decreases theta.
         d_center = (d_left + d_right) / 2.0
-        d_theta = (d_right - d_left) / WHEEL_BASE_M
+        d_theta = (d_left - d_right) / WHEEL_BASE_M
 
         # Convert to map pixels
         d_center_px = d_center / MAP_SCALE_M_PER_PX

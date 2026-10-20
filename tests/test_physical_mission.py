@@ -165,20 +165,20 @@ def test_follow_path_pivots_on_large_heading_error():
 
     # Robot at (400, 300) facing East (theta=0).
     # Waypoint is at (400, 200): dy = -100, dx = 0 -> angle = -pi/2 (-90 deg).
-    # Error = -pi/2 < -0.45 rad -> Pivot RIGHT!
+    # North is to the robot's LEFT -> angle_to_la < 0 -> Pivot LEFT!
     state_face_east = VehicleState(x=400.0, y=300.0, theta=0.0)
-    cmd_right = planner.follow_path(state_face_east)
-    assert cmd_right.dir_a == MotorDirection.FWD
-    assert cmd_right.dir_b == MotorDirection.REV
-    assert cmd_right.pwm_b > cmd_right.pwm_a or cmd_right.pwm_a >= 140
-
-    # Path heading straight down (dy = +100, dx = 0 -> angle = +pi/2)
-    planner.path = [(400, 300), (400, 400)]
-    planner.path_index = 0
-    # Robot facing East (theta=0). Error = +pi/2 > 0.45 rad -> Pivot LEFT!
     cmd_left = planner.follow_path(state_face_east)
     assert cmd_left.dir_a == MotorDirection.REV
     assert cmd_left.dir_b == MotorDirection.FWD
+
+    # Path heading straight down (dy = +100, dx = 0 -> angle = +pi/2)
+    # South is to the robot's RIGHT -> angle_to_la > 0 -> Pivot RIGHT!
+    planner.path = [(400, 300), (400, 400)]
+    planner.path_index = 0
+    cmd_right = planner.follow_path(state_face_east)
+    assert cmd_right.dir_a == MotorDirection.FWD
+    assert cmd_right.dir_b == MotorDirection.REV
+    assert cmd_right.pwm_a >= 140 or cmd_right.pwm_b >= 140
 
 
 def test_follow_path_drives_forward_when_aligned():
