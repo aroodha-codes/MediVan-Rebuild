@@ -143,14 +143,21 @@ class CameraHW:
 
         # 1. AI obstacle detection (YOLOv8n ONNX throttled to every 3rd frame to sustain 15+ FPS)
         self._frame_count += 1
-        if self._frame_count % 3 == 1 or not self._cached_obstacles:
-            self._cached_obstacles = self.detector.detect(frame)
         obstacles = self._cached_obstacles
+        try:
+            if self._frame_count % 3 == 1 or not self._cached_obstacles:
+                self._cached_obstacles = self.detector.detect(frame)
+            obstacles = self._cached_obstacles
+        except Exception as det_err:
+            print(f"[AI] Detector error: {det_err}")
 
         # 2. ArUco dock marker -- only when asked, since it costs CPU
         dock_result: Optional[DockResult] = None
         if dock_mode:
-            dock_result = self._detect_dock(frame)
+            try:
+                dock_result = self._detect_dock(frame)
+            except Exception as dock_err:
+                print(f"[ArUco] Dock detection error: {dock_err}")
 
         # 3. Raw frame out. NOT annotated -- see module docstring.
         return obstacles, dock_result, frame

@@ -609,7 +609,7 @@
 
     $$('[data-drive]').forEach(btn => {
       btn.addEventListener('contextmenu', e => e.preventDefault());
-      btn.addEventListener('pointerdown', async e => {
+      btn.addEventListener('click', async e => {
         if (API.source !== 'http') {
           e.preventDefault();
           toast('warn', 'Manual drive unavailable', 'Dashboard is not connected to a live robot.');
@@ -621,20 +621,19 @@
           toast('bad', 'Manual mode failed', err.message || String(err));
           return;
         }
-        e.preventDefault();
+        const dir = btn.dataset.drive;
+        if (dir === 'stop') {
+          stopDashboardDrive();
+          return;
+        }
         if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
-        dashboardDriveDirection = btn.dataset.drive;
-        try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+        dashboardDriveDirection = dir;
         sendDashboardDrive(dashboardDriveDirection);
         dashboardDriveTimer = setInterval(() => {
           if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-        }, 200);
+        }, 250);
       });
-      ['pointerup', 'pointercancel'].forEach(name =>
-        btn.addEventListener(name, stopDashboardDrive));
     });
-    window.addEventListener('blur', stopDashboardDrive);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) stopDashboardDrive(); });
 
     const KEY_DIR_MAP = {
       ArrowUp: 'forward', KeyW: 'forward',
@@ -654,21 +653,17 @@
       } catch (_) {
         return;
       }
+      if (dir === 'stop') {
+        stopDashboardDrive();
+        return;
+      }
       if (dashboardDriveDirection === dir) return;
       if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
       dashboardDriveDirection = dir;
       sendDashboardDrive(dashboardDriveDirection);
       dashboardDriveTimer = setInterval(() => {
         if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-      }, 200);
-    });
-    window.addEventListener('keyup', e => {
-      if (API.source !== 'http') return;
-      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
-      const dir = KEY_DIR_MAP[e.code];
-      if (dir && dashboardDriveDirection === dir) {
-        stopDashboardDrive();
-      }
+      }, 250);
     });
 
     $$('#tgPath,#tgFrontier,#tgTrail').forEach(t => t.addEventListener('change', drawMap));

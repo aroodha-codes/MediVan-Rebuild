@@ -613,6 +613,7 @@ class AIObstacleDetector:
             return []
 
         indices = np.array(indices).reshape(-1)
+        detections = []
 
         for i in indices:
 

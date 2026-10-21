@@ -74,6 +74,36 @@ class TestAIDetector:
             assert r.action in list(ObstacleAction)
             assert 0.0 <= r.confidence <= 1.0
 
+    def test_run_yolo_detections_parsing(self):
+        """Verify _run_yolo decodes output tensors and returns detections list properly."""
+        det = AIObstacleDetector()
+        det.model_loaded = True
+        det.input_size = 320
+        # Shape (1, 84, 100) where rows < cols, transposing to (100, 84) like real YOLOv8
+        output = np.zeros((1, 84, 100), dtype=np.float32)
+        output[0, 0, 0] = 160.0
+        output[0, 1, 0] = 160.0
+        output[0, 2, 0] = 50.0
+        output[0, 3, 0] = 50.0
+        output[0, 4, 0] = 0.9  # class 0 confidence
+
+        class MockNet:
+            def setInput(self, blob):
+                pass
+            def forward(self):
+                return output
+
+        det.net = MockNet()
+
+        frame = np.full((240, 320, 3), 128, dtype=np.uint8)
+        results = det._run_yolo(frame)
+        assert isinstance(results, list)
+        assert len(results) == 1
+        class_id, conf, bbox = results[0]
+        assert class_id == 0
+        assert conf >= 0.85
+        assert len(bbox) == 4
+
 
 # ── Q-Learning Agent ─────────────────────────────
 
