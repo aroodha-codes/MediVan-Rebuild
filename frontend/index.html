@@ -44,8 +44,6 @@
       <span class="rail__glyph">◈</span><span class="rail__label">Live map</span></a>
     <a class="rail__item" href="#/camera" data-page="camera">
       <span class="rail__glyph">◉</span><span class="rail__label">Camera</span></a>
-    <a class="rail__item" href="#/analytics" data-page="analytics">
-      <span class="rail__glyph">◹</span><span class="rail__label">Analytics</span></a>
     <a class="rail__item" href="#/settings" data-page="settings">
       <span class="rail__glyph">⚙</span><span class="rail__label">Settings</span></a>
   </nav>
@@ -227,36 +225,11 @@
       </article>
     </section>
 
-    <!-- ═══════════════ 5. ANALYTICS ═══════════════ -->
-    <section class="page" data-page="analytics">
-      <div class="page__head">
-        <h1>Analytics</h1>
-        <p class="page__sub">Rolling window, last 60 samples.</p>
-      </div>
-      <div class="grid grid--charts">
-        <article class="card chart"><h2 class="card__title">Coverage %</h2><canvas data-chart="coverage" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">Battery %</h2><canvas data-chart="battery" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">CPU %</h2><canvas data-chart="cpu" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">Memory MB</h2><canvas data-chart="ram" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">Loop rate FPS</h2><canvas data-chart="fps" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">Speed m/s</h2><canvas data-chart="speed" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">Localisation drift px</h2><canvas data-chart="drift" height="150"></canvas></article>
-        <article class="card chart"><h2 class="card__title">Route length m</h2><canvas data-chart="path" height="150"></canvas></article>
-      </div>
-      <article class="card">
-        <h2 class="card__title">Delivery times</h2>
-        <table class="table" id="deliveryTable">
-          <thead><tr><th>Destination</th><th>Payload</th><th>Completed</th><th class="num">Duration</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </article>
-    </section>
-
-    <!-- ═══════════════ 6. SETTINGS ═══════════════ -->
+    <!-- ═══════════════ 5. SETTINGS ═══════════════ -->
     <section class="page" data-page="settings">
       <div class="page__head">
         <h1>Settings</h1>
-        <p class="page__sub">Connection and operating preferences.</p>
+        <p class="page__sub">Robot connection and operating configuration.</p>
       </div>
       <article class="card">
         <h2 class="card__title">Data source</h2>
@@ -271,19 +244,8 @@
           <label for="setHost">Robot address</label>
           <input id="setHost" type="text" value="http://raspberrypi.local:5000">
         </div>
-        <button class="btn" id="setApply">Apply</button>
-        <p class="note">Switching to <em>Live robot</em> points every request at the
-           address above. Nothing else in the interface changes.</p>
-      </article>
-      <article class="card">
-        <h2 class="card__title">Operating</h2>
-        <div class="field">
-          <label for="setDock">Return to dock below</label>
-          <input id="setDock" type="range" min="10" max="60" value="25">
-          <output id="setDockOut">25%</output>
-        </div>
-        <label class="switch"><input type="checkbox" id="setSound"><span>Audible alerts</span></label>
-        <label class="switch"><input type="checkbox" id="setMotion"><span>Reduce motion</span></label>
+        <button class="btn btn--primary" id="setApply">Apply Connection</button>
+        <p class="note">Connecting to <em>Live robot</em> streams telemetry, live map, and camera feeds directly from the Raspberry Pi hardware controller.</p>
       </article>
     </section>
 
@@ -292,15 +254,11 @@
   <!-- ══ CONTROL DOCK ══ -->
   <aside class="controls" aria-label="Vehicle controls">
     <h2 class="controls__title">Controls</h2>
-    <button class="btn btn--primary" data-cmd="start">Start mission</button>
+    <button class="btn btn--primary" data-cmd="start">Start Mission</button>
     <button class="btn" data-cmd="pause">Pause</button>
     <button class="btn" data-cmd="resume">Resume</button>
-    <button class="btn" data-cmd="dock">Return to dock</button>
-    <button class="btn" data-cmd="reset">Reset map</button>
+    <button class="btn" data-cmd="dock">Return to Dock</button>
     <button class="btn btn--primary" data-cmd="finish-explore" style="background:#2e7d32; border-color:#2e7d32; font-weight:bold; margin-top:4px;">Save Map & Ready for Delivery</button>
-    <div class="controls__split"></div>
-    <button class="btn btn--ghost" data-cmd="export-map">Export map</button>
-    <button class="btn btn--ghost" data-cmd="export-logs">Export logs</button>
     <div class="controls__split"></div>
     <label class="switch"><input type="checkbox" id="manualMode"><span>Manual driving</span></label>
     <p class="note" id="manualDriveStatus" aria-live="polite">Controller status: waiting for live robot telemetry.</p>

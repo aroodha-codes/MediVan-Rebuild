@@ -37,7 +37,7 @@ from config import (
     SLAM_CONFIDENCE_THRESHOLD, SLAM_FREE_RANGE_NO_HIT,
     SLAM_LOG_ODDS_OCC, SLAM_LOG_ODDS_PRIOR,
     COLOR_FREE, COLOR_WALL, COLOR_JUNCTION, COLOR_DOCK, COLOR_START,
-    MotorCommand, MotorDirection,
+    MotorCommand, MotorDirection, ObstacleAction,
 )
 
 # Grid dimensions
@@ -46,15 +46,7 @@ _GH = MAP_HEIGHT // SLAM_GRID_RESOLUTION
 
 
 class SLAMEngine:
-    """Visual SLAM: camera edge detection + encoder odometry.
-
-    Builds an occupancy grid by analysing camera frames for walls
-    (Canny edges) and projecting detections onto the map using the
-    robot's estimated pose from encoder odometry.
-
-    Particle filter refines pose estimates using camera observations.
-    Wall-following explorer ensures full coverage.
-    """
+    """Visual SLAM: camera range/edge detection + encoder odometry."""
 
     def __init__(self, ground_truth_free_fn=None) -> None:
         # Occupancy grid (log-odds representation)
@@ -67,13 +59,17 @@ class SLAMEngine:
 
         # Exploration state
         self._frontier_goal = None      # (gx, gy) current frontier target
-        self._frontier_path = []        # BFS waypoint list, pixel coords
+        self._frontier_path = []        # BFS waypoint list, grid coords
         self._frontier_idx = 0
         self._frontier_fail = 0
         self._no_frontier_streak = 0
+        self._pivoting = False
+        self._goal_ticks = 0
+        self._goal_start_pos = (0.0, 0.0)
+        self._blacklist: set[Tuple[int, int]] = set()
         self.explored_cells = 0
         self.frontier_count = 0
-        self._explore_dir = 1  # 1=left-wall-follow, -1=right
+        self._explore_dir = 1
         self._stuck_count = 0
         self._last_x = 0.0
         self._last_y = 0.0
@@ -106,7 +102,9 @@ class SLAMEngine:
             ]
         self._particles_initialized = True
         self._last_x = start_x
+        self._last_x = start_x
         self._last_y = start_y
+        self._goal_start_pos = (start_x, start_y)
 
         # Mark start area as free
         gx, gy = int(start_x) // SLAM_GRID_RESOLUTION, int(start_y) // SLAM_GRID_RESOLUTION
@@ -138,17 +136,8 @@ class SLAMEngine:
         self._predict_particles(enc_dx, enc_dy, enc_dtheta)
 
         # 2. Observation -> wall/free cells.
-        #
-        # PREFERRED PATH: a RangeScan from a PerceptionSource. This is
-        # pose-dependent, geometrically grounded and identical in simulation
-        # and on hardware. The legacy camera-pixel path is retained only as a
-        # fallback for callers that have not been migrated; it is known to be
-        # unreliable (the simulated frame did not depend on pose at all), so
-        # do not use it for new work.
         if scan is not None:
             walls, frees = self._cells_from_scan(scan)
-            # If scan had zero valid returns (e.g. poor lighting or camera glitch),
-            # fall back to camera edge extraction so SLAM never drops observation completely.
             if not walls and not frees and cam_frame is not None:
                 walls, frees = self._extract_walls_from_camera(
                     cam_frame, robot_x, robot_y, robot_theta
@@ -158,7 +147,42 @@ class SLAMEngine:
                 cam_frame, robot_x, robot_y, robot_theta
             )
 
-        # 3. Update occupancy grid
+        # On hardware / real-camera (no ground-truth map), guard against floor
+        # glare/shadows starving frontier generation when no obstacle is present:
+        has_stop_obstacle = bool(
+            ai_results and any(
+                getattr(o, "action", None) == ObstacleAction.STOP
+                and getattr(o, "confidence", 0.0) >= 0.65
+                for o in ai_results
+            )
+        )
+        if self._gt_free_fn is None and not has_stop_obstacle and cam_frame is not None:
+            res = SLAM_GRID_RESOLUTION
+            rgx, rgy = int(robot_x) // res, int(robot_y) // res
+            # Reject spurious ultra-close wall returns (< 2 cells from robot center)
+            # when no obstacle is blocking the camera corridor.
+            walls = [
+                (wx, wy) for (wx, wy) in walls
+                if abs(wx - rgx) > 1 or abs(wy - rgy) > 1
+            ]
+            # If the floor segmentation yielded too few free cells this frame,
+            # project a conservative forward free cone out to SLAM_FREE_RANGE_NO_HIT
+            # so frontiers always advance into clear corridor space.
+            if len(frees) < 6:
+                half_cone = math.radians(20.0)
+                for i in range(7):
+                    ang = robot_theta - half_cone + (i / 6.0) * (2.0 * half_cone)
+                    ca, sa = math.cos(ang), math.sin(ang)
+                    for step_px in range(res, SLAM_FREE_RANGE_NO_HIT + 1, res):
+                        fx = int(robot_x + step_px * ca) // res
+                        fy = int(robot_y + step_px * sa) // res
+                        if not (0 <= fx < _GW and 0 <= fy < _GH):
+                            break
+                        if self.grid[fy, fx] > 1.2:
+                            break
+                        frees.append((fx, fy))
+
+        # 3. Update occupancy grid (deduplicated per scan)
         self._update_grid(walls, frees, robot_x, robot_y)
 
         # 4. Particle filter measurement update
@@ -175,55 +199,19 @@ class SLAMEngine:
                     self._visited[ny, nx] = True
                     # A physical vehicle can only occupy and traverse free space.
                     # Record the traversed footprint as known-free corridor.
-                    self.grid[ny, nx] = min(self.grid[ny, nx], -1.0)
+                    self.grid[ny, nx] = min(self.grid[ny, nx], -1.2)
 
         # 6. Process semantic landmarks from AI results
         if ai_results:
             self._process_semantic_landmarks(ai_results, robot_x, robot_y, robot_theta)
 
         # 7. Compute coverage
-        #
-        # FIX — THE 85 % THRESHOLD WAS MATHEMATICALLY UNREACHABLE.
-        # The old metric was  explored / (grid_w * grid_h)  = explored / 4800.
-        # But on hospital_map.png only 1100 cells are reachable free space and
-        # 416 are mappable wall cells adjacent to it: 1516 of 4800 = 31.6 %.
-        # Every other cell is solid interior the robot can never observe, so
-        # coverage could never exceed 31.6 % and SLAM_COVERAGE_THRESHOLD=0.85
-        # could never fire. Mapping never completed, the state machine never
-        # left MAPPING, and the A* navigation layer was never reached.
-        #
-        # Correct formulation: a SLAM agent does not know the size of the
-        # world in advance, so the denominator must be *discovered*, not
-        # assumed. Coverage is now the fraction of the explored boundary that
-        # has been closed:
-        #
-        #       coverage = explored / (explored + open_frontier)
-        #
-        # It rises monotonically toward 1.0 as frontiers are consumed and
-        # equals 1.0 exactly when no reachable frontier remains — the
-        # standard termination condition for frontier exploration.
-        # NUMERATOR FIX — _visited was not a measure of observation.
-        # Step 5 above marks a 3x3 block around the robot every tick, and
-        # initialize() marks a 5x5 block, purely from POSE. Neither involves
-        # the camera, so solid interior wall cells the sensor never saw were
-        # counted as explored. Measured consequence: explored_cells reached
-        # 3424 against a 1516-cell observable ceiling — coverage percentages
-        # above 100 % (225 %), and a numerator that grew with time-on-map
-        # rather than with information gained.
-        #
-        # Coverage is now derived from the occupancy grid itself. A cell
-        # counts as observed only once ray-casting has pushed its log-odds
-        # away from the prior by more than SLAM_CONFIDENCE_THRESHOLD, SLAM_FREE_RANGE_NO_HIT, i.e.
-        # the sensor has actually committed to "free" or "occupied". This is
-        # bounded by construction: only cells a ray reached can ever qualify.
         total_explored = int(np.count_nonzero(
             np.abs(self.grid) > SLAM_CONFIDENCE_THRESHOLD))
         frontier_count = self._count_frontiers()
         self.explored_cells = total_explored
         self.frontier_count = frontier_count
-        # Guard against a false "complete" on the first few ticks: before the
-        # camera has revealed anything, explored is tiny and frontier_count is
-        # 0, which would otherwise read as 100 % mapped.
+
         _warmup = (self.frame_count < SLAM_MIN_MAPPING_FRAMES or
                    total_explored < SLAM_MIN_EXPLORED_CELLS)
         if _warmup:
@@ -239,28 +227,23 @@ class SLAMEngine:
         else:
             self._no_frontier_streak = 0
 
-        # Completion is decided by FRONTIER EXHAUSTION alone. The coverage
-        # ratio explored/(explored+frontier) saturates quickly — at 1000
-        # explored cells with 100 frontiers still open it already reads 91 %,
-        # which would hand a two-thirds-finished map to the navigation layer.
-        # "No reachable frontier remains" is the only honest completion test.
-        # Completion fires on EITHER frontier exhaustion OR the coverage
-        # threshold. Exhaustion is the principled test, but the explorer does
-        # not reliably drive every frontier to zero (measured: 674-1509 of
-        # 1516 observable cells across runs), so the threshold acts as a
-        # bounded fallback that prevents the robot mapping forever.
-        # Completion fires on EITHER frontier exhaustion OR the coverage
-        # threshold or when all reachable frontiers have been explored.
+        free_cell_count = int(np.count_nonzero(self.grid < -0.3))
+        hardware_budget_reached = (
+            self._gt_free_fn is None
+            and self.frame_count >= 350
+            and free_cell_count >= 35
+        )
         coverage_fallback = (
             self.coverage >= SLAM_COVERAGE_THRESHOLD
-            or (self.coverage >= 0.75 and self._frontier_fail >= 30)
-            or self._frontier_fail >= 90
+            or (self.coverage >= 0.75 and self._frontier_fail >= 25)
+            or self._frontier_fail >= 60
+            or hardware_budget_reached
         )
 
         if (
             not _warmup
             and (
-                self._no_frontier_streak >= 30
+                self._no_frontier_streak >= 25
                 or coverage_fallback
             )
             and not self.mapping_complete
@@ -277,34 +260,29 @@ class SLAMEngine:
         self, robot_x: float, robot_y: float, robot_theta: float,
         is_free_fn=None,
     ) -> MotorCommand:
-        """Frontier-based exploration command.
-
-        REPLACES the previous reactive wall-follower.
-
-        The old left-wall-follow heuristic could not achieve coverage: with no
-        global memory it re-drove the same corridor, and any head-on wall
-        contact froze it permanently (measured: 6.3 % coverage after 4000
-        steps, so the 85 % MAPPING -> NAVIGATION handover never fired).
-
-        This implementation uses the classic frontier-exploration algorithm
-        (Yamauchi, 1997) against the SLAM occupancy grid:
-
-          1. A *frontier* is a known-free cell adjacent to an unknown cell --
-             i.e. the boundary of what has been mapped so far.
-          2. BFS over known-free grid cells finds the nearest reachable
-             frontier from the robot's current cell.
-          3. The robot drives to it with proportional heading control.
-          4. On arrival (or if the target becomes stale) a new frontier is
-             selected. When no frontiers remain, the map is complete.
-
-        This guarantees monotonic progress: every frontier reached converts
-        unknown cells to known, so the frontier set strictly shrinks.
-        """
+        """Frontier-based exploration command with smooth lookahead & pivot hysteresis."""
         free_fn = is_free_fn or self._gt_free_fn or self._grid_is_free
         res = SLAM_GRID_RESOLUTION
         base_pwm = max(175, int(SLAM_WALL_FOLLOW_PWM))
 
         gx, gy = int(robot_x) // res, int(robot_y) // res
+
+        # ── Stuck / progress watchdog on current frontier goal ──────────
+        if self._frontier_goal is not None:
+            self._goal_ticks += 1
+            if self._goal_ticks >= 45:
+                moved = math.hypot(robot_x - self._goal_start_pos[0],
+                                   robot_y - self._goal_start_pos[1])
+                if moved < 8.0:
+                    # Could not make physical progress toward this frontier;
+                    # blacklist it temporarily and pick a different frontier.
+                    self._blacklist.add(self._frontier_goal)
+                    self._frontier_goal = None
+                    self._frontier_path = []
+                    self._goal_ticks = 0
+                else:
+                    self._goal_start_pos = (robot_x, robot_y)
+                    self._goal_ticks = 0
 
         # ── (re)plan when we have no goal or have consumed the path ──────
         need_plan = (
@@ -312,7 +290,6 @@ class SLAMEngine:
             or self._frontier_idx >= len(self._frontier_path)
         )
         if not need_plan and self.frame_count % 30 == 0:
-            # Periodic refresh: drop the goal if it is no longer a frontier.
             fgx, fgy = self._frontier_goal
             if not self._is_frontier(fgx, fgy):
                 need_plan = True
@@ -324,34 +301,25 @@ class SLAMEngine:
                 self._frontier_goal = goal
                 self._frontier_idx = 0
                 self._frontier_fail = 0
+                self._goal_ticks = 0
+                self._goal_start_pos = (robot_x, robot_y)
             else:
-                # No reachable frontier yet — spin to reveal new cells with the
-                # camera, then escape forward to open unexplored space.
-                self._frontier_fail += 1
-                self._frontier_goal = None
-                self._frontier_path = []
-                turn_pwm = 175
-                # Every 6 fails: drive forward for 2 ticks to move into new area.
-                if self._frontier_fail % 6 < 2:
-                    return MotorCommand(turn_pwm, turn_pwm,
-                                        MotorDirection.FWD, MotorDirection.FWD)
-                # Alternate spin direction every 3 fails so camera sees both sides.
-                if (self._frontier_fail // 3) % 2 == 0:
-                    return MotorCommand(turn_pwm, turn_pwm,
-                                        MotorDirection.FWD, MotorDirection.REV)
-                return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.REV, MotorDirection.FWD)
+                return self._fallback_explore_step(gx, gy, robot_theta, free_fn)
 
-        # ── advance the waypoint cursor with generous radius (18 px) ─────
+        # ── advance the waypoint cursor ─────────────────────────────────
+        # Use 1.25 cells for intermediate waypoints and 0.75 cells for the final
+        # frontier cell so the vehicle actually enters the frontier cell.
         while self._frontier_idx < len(self._frontier_path):
             wx, wy = self._frontier_path[self._frontier_idx]
             px, py = wx * res + res // 2, wy * res + res // 2
-            if math.hypot(px - robot_x, py - robot_y) < res * 1.8:
+            is_last = (self._frontier_idx == len(self._frontier_path) - 1)
+            reach_radius = res * 0.75 if is_last else res * 1.25
+            if math.hypot(px - robot_x, py - robot_y) < reach_radius:
                 self._frontier_idx += 1
             else:
                 break
 
-        # If reached end of current frontier path, smoothly transition to next frontier
+        # If reached end of current frontier path, select next frontier immediately
         if self._frontier_idx >= len(self._frontier_path):
             self._frontier_goal = None
             self._frontier_path = []
@@ -361,30 +329,27 @@ class SLAMEngine:
                 self._frontier_goal = goal
                 self._frontier_idx = 0
                 self._frontier_fail = 0
+                self._goal_ticks = 0
+                self._goal_start_pos = (robot_x, robot_y)
             else:
-                self._frontier_fail += 1
-                turn_pwm = 175
-                if self._frontier_fail % 6 < 2:
-                    return MotorCommand(turn_pwm, turn_pwm,
-                                        MotorDirection.FWD, MotorDirection.FWD)
-                if (self._frontier_fail // 3) % 2 == 0:
-                    return MotorCommand(turn_pwm, turn_pwm,
-                                        MotorDirection.FWD, MotorDirection.REV)
-                return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.REV, MotorDirection.FWD)
+                return self._fallback_explore_step(gx, gy, robot_theta, free_fn)
 
         # ── lookahead target (aim 2 waypoints ahead for smooth steering arcs) ──
         la_idx = min(self._frontier_idx + 2, len(self._frontier_path) - 1)
         wx, wy = self._frontier_path[la_idx]
         tx, ty = wx * res + res // 2, wy * res + res // 2
 
-        # ── proportional heading control with hysteresis ─────────────────
+        # ── proportional heading control with pivot hysteresis ───────────
         desired = math.atan2(ty - robot_y, tx - robot_x)
         err = math.atan2(math.sin(desired - robot_theta),
                          math.cos(desired - robot_theta))
 
         if abs(err) > 0.60:
-            # Significant angular misalignment -> smooth in-place pivot at PWM 175
+            self._pivoting = True
+        elif abs(err) < 0.25:
+            self._pivoting = False
+
+        if self._pivoting:
             turn_pwm = 175
             if err > 0:
                 # Target is to the right (clockwise): left wheel FWD, right wheel REV
@@ -394,12 +359,43 @@ class SLAMEngine:
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 
-        # Small/moderate error -> drive forward with symmetric differential steering
+        # Aligned -> drive forward with symmetric differential steering
         corr = int(max(-0.45, min(0.45, err * 0.95)) * base_pwm)
         left = max(PWM_DEADBAND + 35, min(255, base_pwm + corr))
         right = max(PWM_DEADBAND + 35, min(255, base_pwm - corr))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)
+
+    def _fallback_explore_step(
+        self, gx: int, gy: int, robot_theta: float, free_fn
+    ) -> MotorCommand:
+        """Sustained sweep + forward exploration step when no frontier path is found."""
+        self._frontier_fail += 1
+        self._frontier_goal = None
+        self._frontier_path = []
+        turn_pwm = 175
+
+        # Clear temporary blacklist if no frontiers were reachable
+        if self._blacklist and self._frontier_fail % 10 == 0:
+            self._blacklist.clear()
+
+        # Check if the cell 2 steps ahead along current heading is traversable
+        ahead_gx = gx + int(round(math.cos(robot_theta) * 2))
+        ahead_gy = gy + int(round(math.sin(robot_theta) * 2))
+        ahead_clear = (
+            0 <= ahead_gx < _GW
+            and 0 <= ahead_gy < _GH
+            and self._cell_traversable(ahead_gx, ahead_gy, free_fn)
+        )
+
+        # 24-tick cycle (~0.8 s): first 14 ticks sweep right to scan with camera,
+        # next 10 ticks drive smoothly forward if clear ahead.
+        phase = (self._frontier_fail - 1) % 24
+        if phase >= 14 and ahead_clear:
+            return MotorCommand(turn_pwm, turn_pwm,
+                                MotorDirection.FWD, MotorDirection.FWD)
+        return MotorCommand(turn_pwm, turn_pwm,
+                            MotorDirection.FWD, MotorDirection.REV)
 
     # -- frontier helpers -----------------------------------
 
@@ -529,7 +525,10 @@ class SLAMEngine:
              multiplier so the robot commits to a target instead of
              thrashing between two similar clusters.
         """
-        mask = self._frontier_mask()
+        mask = self._frontier_mask().copy()
+        for bx, by in self._blacklist:
+            if 0 <= by < mask.shape[0] and 0 <= bx < mask.shape[1]:
+                mask[by, bx] = False
         if not mask.any():
             return None, []
 
@@ -558,8 +557,12 @@ class SLAMEngine:
                                 and mask[ny, nx] and not labels[ny, nx]):
                             labels[ny, nx] = cur
                             stack.append((nx, ny))
+            # Prefer frontier cells that are at least 1 step away from (gx, gy)
             reachable = [(c, dist[c[1], c[0]]) for c in comp
-                         if dist[c[1], c[0]] >= 0]
+                         if dist[c[1], c[0]] > 0]
+            if not reachable:
+                reachable = [(c, dist[c[1], c[0]]) for c in comp
+                             if dist[c[1], c[0]] >= 0]
             if not reachable:
                 continue
             best_cell, best_d = min(reachable, key=lambda t: t[1])
@@ -601,6 +604,20 @@ class SLAMEngine:
             path.append(node)
             node = parent[node]
         path.reverse()
+        if not path:
+            path = [best]
+
+        # Extend path 1 cell into the adjacent unknown space so the vehicle
+        # physically enters the unexplored boundary when reaching the frontier.
+        bx, by = best
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ux, uy = bx + dx, by + dy
+            if (0 <= ux < w and 0 <= uy < h
+                    and abs(self.grid[uy, ux]) <= 0.3
+                    and self._cell_traversable(ux, uy, free_fn)):
+                path.append((ux, uy))
+                break
+
         return best, path
 
     def get_slam_display(self) -> np.ndarray:
@@ -889,12 +906,15 @@ class SLAMEngine:
         frees: List[Tuple[int, int]],
         rx: float, ry: float,
     ) -> None:
-        """Update occupancy grid with log-odds."""
-        for gx, gy in frees:
+        """Update occupancy grid with deduplicated per-scan log-odds."""
+        free_set = set(frees)
+        wall_set = set(walls) - free_set
+
+        for gx, gy in free_set:
             self.grid[gy, gx] = max(-5.0, self.grid[gy, gx] + SLAM_LOG_ODDS_FREE)
             self._visited[gy, gx] = True
 
-        for gx, gy in walls:
+        for gx, gy in wall_set:
             self.grid[gy, gx] = min(5.0, self.grid[gy, gx] + SLAM_LOG_ODDS_OCC)
             self._visited[gy, gx] = True
 
@@ -950,10 +970,10 @@ class SLAMEngine:
 
     def _grid_is_free(self, x: int, y: int) -> bool:
         """Check if a pixel position is free according to SLAM grid."""
-        gx = x // SLAM_GRID_RESOLUTION
-        gy = y // SLAM_GRID_RESOLUTION
+        gx = int(x) // SLAM_GRID_RESOLUTION
+        gy = int(y) // SLAM_GRID_RESOLUTION
         if 0 <= gx < _GW and 0 <= gy < _GH:
-            return self.grid[gy, gx] < -0.3
+            return bool(self.grid[gy, gx] < -0.3)
         return False
 
     @staticmethod

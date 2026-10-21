@@ -25,7 +25,6 @@
       else drawMap();
     }
     if (page === 'camera') refreshCamera();
-    if (page === 'analytics') refreshAnalytics();
     if (page === 'missions') refreshMissions();
   }
   window.addEventListener('hashchange', route);
@@ -688,11 +687,6 @@
         API.source === 'mock' ? 'Showing demo data.' : 'Connected to the robot address; physical destinations use live SLAM.');
       API.stream.start();
     });
-    $('#setDock').addEventListener('input', e => $('#setDockOut').textContent = e.target.value + '%');
-    $('#setMotion').addEventListener('change', e => {
-      state.reduceMotion = e.target.checked;
-      document.documentElement.style.setProperty('scroll-behavior', e.target.checked ? 'auto' : 'smooth');
-    });
   }
 
   /* ═════════ BOOT ═════════ */
@@ -727,7 +721,6 @@
     setInterval(() => {
       if (state.page === 'dashboard' || state.page === 'map') refreshMap();
       if (state.page === 'camera') refreshCamera();
-      if (state.page === 'analytics') refreshAnalytics();
       if (state.page === 'missions') refreshMissions();
     }, 1400);
   }

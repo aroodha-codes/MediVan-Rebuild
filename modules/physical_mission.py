@@ -10,7 +10,10 @@ from typing import Callable, Optional, Tuple
 
 import numpy as np
 
-from config import CELL_SIZE_PX, SLAM_GRID_RESOLUTION, VEHICLE_WIDTH_PX, MAP_WIDTH, MAP_HEIGHT
+from config import (
+    CELL_SIZE_PX, COST_FREE, COST_NEAR_WALL,
+    SLAM_GRID_RESOLUTION, VEHICLE_WIDTH_PX, MAP_WIDTH, MAP_HEIGHT,
+)
 
 
 def planner_callbacks(slam):
@@ -32,7 +35,11 @@ def planner_callbacks(slam):
         return True
 
     def cost(x: int, y: int) -> int:
-        return CELL_SIZE_PX if safe(x, y) else 10**6
+        if safe(x, y):
+            return COST_FREE
+        if free(x, y):
+            return COST_NEAR_WALL
+        return 10**6
 
     def near_wall(x: int, y: int, margin: int) -> bool:
         # Sample the square around the requested clearance; unknown is blocked.

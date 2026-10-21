@@ -359,24 +359,20 @@ class CameraPerceptionSource(PerceptionSource):
 
     @staticmethod
     def segment_floor(frame: np.ndarray,
-                      sample_rows: int = 30,
-                      tol: float = 3.2) -> np.ndarray:
-        """Boolean mask, True where a pixel is judged to be floor.
-
-        Optimized, illumination-tolerant indoor floor segmentation:
-        1. Reference sampling avoids robot bumper/castor/shadow at bottom 15 rows.
-        2. In Lab colour space, Luminance (L) variation is decoupled from Chroma (a, b).
-           Luminance std floor is set to 35.0 to absorb overhead lighting falloff and
-           corridor shadows, while chromaticity (a, b) std floor is 9.0 to strictly
-           distinguish colored obstacles, walls, furniture, and baseboards.
-        3. Morphological opening (3x3) eliminates isolated single-pixel noise.
-        4. Morphological closing (3x7) bridges thin tile seams, grout lines, and glare.
-        5. Region immediately in front of wheels is treated as clear.
+                      sample_rows: int = 35,
+                      tol: float = 3.5) -> np.ndarray:
+        """Illumination-tolerant indoor floor segmentation:
+        1. Reference sampling avoids robot bumper/castor/shadow at bottom 18 rows.
+        2. Lab colour space with wide Luminance (L) std floor (42.0) to absorb
+           overhead lighting falloff and corridor shadows, and chromaticity (a, b)
+           std floor (12.0) to tolerate floor reflections while rejecting walls/obstacles.
+        3. Morphological opening (3x3) and vertical closing (5x9) bridge tile seams.
+        4. Immediate near-bumper rows are treated as clear.
         """
         import cv2
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
         h, w = lab.shape[:2]
-        y_end = max(1, h - 15)
+        y_end = max(1, h - 18)
         y_start = max(0, y_end - sample_rows)
         x_start = int(w * 0.15)
         x_end = int(w * 0.85)
@@ -384,9 +380,9 @@ class CameraPerceptionSource(PerceptionSource):
         mu = ref.mean(axis=(0, 1))
 
         # Decouple Luminance (L) tolerance from Chroma (a, b)
-        sd_L = max(float(ref[:, :, 0].std()), 35.0)
-        sd_a = max(float(ref[:, :, 1].std()), 9.0)
-        sd_b = max(float(ref[:, :, 2].std()), 9.0)
+        sd_L = max(float(ref[:, :, 0].std()), 42.0)
+        sd_a = max(float(ref[:, :, 1].std()), 12.0)
+        sd_b = max(float(ref[:, :, 2].std()), 12.0)
         sd = np.array([sd_L, sd_a, sd_b], dtype=np.float32)
 
         dev = np.abs(lab.astype(np.float32) - mu) / sd
@@ -396,12 +392,12 @@ class CameraPerceptionSource(PerceptionSource):
         k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         mask_open = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, k_open)
 
-        # 3x7 vertical close bridges grout lines, tile seams and reflections
-        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
+        # 5x9 vertical close bridges grout lines, tile seams and reflections
+        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
         mask_clean = cv2.morphologyEx(mask_open, cv2.MORPH_CLOSE, k_close)
 
         mask = mask_clean.astype(bool)
-        mask[max(0, h - 15):, :] = True
+        mask[max(0, h - 18):, :] = True
         return mask
 
     # -- stage 4 ---------------------------------------------------
@@ -474,8 +470,13 @@ class CameraPerceptionSource(PerceptionSource):
         self._set_bearing_geometry(frame.shape[1])
         angles = theta + self._offsets
         import cv2
-        if self._calibrated:
-            frame = cv2.undistort(frame, self.K, self.dist)
+        if self._calibrated and np.any(np.abs(self.dist) > 1e-6):
+            h_f, w_f = frame.shape[:2]
+            map1, map2 = cv2.initUndistortRectifyMap(
+                self.K, self.dist, None, self.K, (w_f, h_f), cv2.CV_16SC2
+            )
+            frame = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR,
+                              borderMode=cv2.BORDER_REPLICATE)
 
         mask = self.segment_floor(frame)
         boundary = self.floor_boundary(mask)

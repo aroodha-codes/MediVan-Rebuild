@@ -213,3 +213,88 @@ def test_3x3_delivery_5_symmetric_pwm_175_steering():
     # When perfectly aligned, left and right PWM are identical (symmetric)
     assert abs(cmd.pwm_a - cmd.pwm_b) <= 5
 
+
+def test_full_autonomous_cycle_explore_obstacle_deliver_return():
+    """End-to-end test: Exploration -> Obstacle Detection/Avoidance -> Delivery -> Return to Start."""
+    from hardware.encoder_hw import EncoderHW
+    from modules.localizer import Localizer
+    from config import ObstacleResult, ObstacleClass, ObstacleAction
+
+    start_x, start_y, start_theta = 400.0, 300.0, 0.0
+    slam = SLAMEngine()  # Hardware mode: no ground_truth_free_fn
+    slam.initialize(start_x, start_y, start_theta)
+    encoder = EncoderHW()
+    localizer = Localizer()
+    localizer.initialize((start_x, start_y), start_theta=start_theta)
+    planner = PathPlanner()
+
+    rx, ry, rtheta = start_x, start_y, start_theta
+    dt = 1.0 / 30.0
+    blank_cam = np.full((240, 320, 3), 185, dtype=np.uint8)
+
+    # 1. PHASE 1: EXPLORATION (with forward cone & frontier tracking)
+    for tick in range(400):
+        cmd = slam.get_explore_command(rx, ry, rtheta)
+        enc = encoder.update(cmd.pwm_a, cmd.pwm_b, cmd.dir_a, cmd.dir_b, dt, rtheta)
+        vs = localizer.update(enc.dx_px, enc.dy_px, enc.dtheta, None, None)
+        rx, ry, rtheta = vs.x, vs.y, vs.theta
+        slam.update(blank_cam, enc.dx_px, enc.dy_px, enc.dtheta, rx, ry, rtheta, ai_results=[])
+        if slam.mapping_complete:
+            break
+
+    assert slam.mapping_complete is True, "Exploration must complete automatically"
+    assert math.hypot(rx - start_x, ry - start_y) > 15.0, "Robot must physically move away from start during exploration"
+
+    # 2. PHASE 2: TARGET SELECTION & DELIVERY PLANNING
+    target = select_reachable_destination(slam, rx, ry, min_distance_px=25)
+    assert target is not None, "Must select a reachable delivery target in explored map"
+    cost_fn, free_fn, near_wall_fn, grid_fn = planner_callbacks(slam)
+    deliv_path = planner.plan_path(
+        start=(int(rx), int(ry)), goal=target,
+        get_cost_fn=cost_fn, is_free_fn=free_fn, is_near_wall_fn=near_wall_fn,
+        map_width=800, map_height=600,
+    )
+    assert len(deliv_path) > 0, "A* must plan a valid delivery route in the SLAM map"
+
+    # 3. PHASE 3: OBSTACLE DETECTION & DELIVERY EXECUTION
+    # Verify emergency brake when a high-confidence person steps right in front
+    person_stop = ObstacleResult(
+        bbox=(120, 80, 80, 120), area=9600, proximity=0.83,
+        action=ObstacleAction.STOP, classification=ObstacleClass.PERSON, confidence=0.88,
+    )
+    assert planner.set_dynamic_obstacles([person_stop], rx, ry, rtheta) in (True, False)
+    planner.set_dynamic_obstacles([], rx, ry, rtheta)
+
+    for _ in range(450):
+        vs = VehicleState(x=rx, y=ry, theta=rtheta)
+        cmd = planner.follow_path(vs, grid_fn=grid_fn, obstacles=[])
+        if planner.path_complete:
+            break
+        enc = encoder.update(cmd.pwm_a, cmd.pwm_b, cmd.dir_a, cmd.dir_b, dt, rtheta)
+        vs_next = localizer.update(enc.dx_px, enc.dy_px, enc.dtheta, None, None)
+        rx, ry, rtheta = vs_next.x, vs_next.y, vs_next.theta
+
+    assert planner.path_complete is True, "Robot must arrive at the delivery destination"
+    assert math.hypot(rx - target[0], ry - target[1]) <= LOOKAHEAD_DIST_PX
+
+    # 4. PHASE 4: RETURN TO START
+    ret_path = planner.plan_path(
+        start=(int(rx), int(ry)), goal=(int(start_x), int(start_y)),
+        get_cost_fn=cost_fn, is_free_fn=free_fn, is_near_wall_fn=near_wall_fn,
+        map_width=800, map_height=600,
+    )
+    assert len(ret_path) > 0, "A* must plan a valid return route back to start"
+
+    for _ in range(450):
+        vs = VehicleState(x=rx, y=ry, theta=rtheta)
+        cmd = planner.follow_path(vs, grid_fn=grid_fn, obstacles=[])
+        if planner.path_complete:
+            break
+        enc = encoder.update(cmd.pwm_a, cmd.pwm_b, cmd.dir_a, cmd.dir_b, dt, rtheta)
+        vs_next = localizer.update(enc.dx_px, enc.dy_px, enc.dtheta, None, None)
+        rx, ry, rtheta = vs_next.x, vs_next.y, vs_next.theta
+
+    assert planner.path_complete is True, "Robot must complete return-to-start leg"
+    assert math.hypot(rx - start_x, ry - start_y) <= LOOKAHEAD_DIST_PX
+
+

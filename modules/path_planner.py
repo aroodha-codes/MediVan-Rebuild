@@ -91,14 +91,82 @@ class PathPlanner:
         self._junction_action: Optional[JunctionAction] = None
         self._junction_reroute_requested: bool = False
 
-        # Destination arrival tracking
+        # Destination arrival & steering hysteresis tracking
         self._arrived: bool = False
+        self._pivoting: bool = False
         self._last_vx: Optional[float] = None
         self._last_vy: Optional[float] = None
 
     # ==========================================================
     # A* SEARCH
     # ==========================================================
+
+    def _run_astar(
+        self,
+        sx: int,
+        sy: int,
+        gx: int,
+        gy: int,
+        max_cx: int,
+        max_cy: int,
+        step: int,
+        margin: int,
+        get_cost_fn: Callable[[int, int], int],
+        is_free_fn: Callable[[int, int], bool],
+        is_near_wall_fn: Callable[[int, int, int], bool],
+        enforce_wall_margin: bool = True,
+    ) -> dict[Tuple[int, int], Optional[Tuple[int, int]]]:
+        counter = 0
+        open_set: list[Tuple[float, int, Tuple[int, int]]] = []
+        heapq.heappush(open_set, (0.0, counter, (sx, sy)))
+        came_from: dict[Tuple[int, int], Optional[Tuple[int, int]]] = {(sx, sy): None}
+        g_score: dict[Tuple[int, int], float] = {(sx, sy): 0.0}
+
+        def heuristic(a: Tuple[int, int], b: Tuple[int, int]) -> float:
+            return (abs(a[0] - b[0]) + abs(a[1] - b[1])) * COST_FREE
+
+        while open_set:
+            _, _, current = heapq.heappop(open_set)
+            if current == (gx, gy):
+                break
+
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx = current[0] + dx
+                ny = current[1] + dy
+
+                if not (0 <= nx < max_cx and 0 <= ny < max_cy):
+                    continue
+
+                px = nx * step + step // 2
+                py = ny * step + step // 2
+
+                if enforce_wall_margin:
+                    if not is_free_fn(px, py):
+                        continue
+                else:
+                    if not is_free_fn(px, py) and get_cost_fn(px, py) >= 10**5:
+                        continue
+
+                if (nx, ny) in self._dynamic_blocked:
+                    continue
+
+                if enforce_wall_margin and is_near_wall_fn(px, py, margin):
+                    continue
+
+                move_cost = get_cost_fn(px, py)
+                if move_cost >= 10**5 and not enforce_wall_margin:
+                    move_cost = COST_FREE * 2
+
+                tentative_g = g_score[current] + move_cost
+
+                if (nx, ny) not in g_score or tentative_g < g_score[(nx, ny)]:
+                    g_score[(nx, ny)] = tentative_g
+                    f_score = tentative_g + heuristic((nx, ny), (gx, gy))
+                    counter += 1
+                    heapq.heappush(open_set, (f_score, counter, (nx, ny)))
+                    came_from[(nx, ny)] = current
+
+        return came_from
 
     def plan_path(
         self,
@@ -124,161 +192,44 @@ class PathPlanner:
             self.path = []
             return self.path
 
-        counter = 0
-
-        open_set: list[
-            Tuple[float, int, Tuple[int, int]]
-        ] = []
-
-        heapq.heappush(
-            open_set,
-            (0.0, counter, (sx, sy))
+        # First pass: strict clearance margin
+        came_from = self._run_astar(
+            sx, sy, gx, gy, max_cx, max_cy, step, margin,
+            get_cost_fn, is_free_fn, is_near_wall_fn,
+            enforce_wall_margin=True,
         )
 
-        came_from: dict[
-            Tuple[int, int],
-            Optional[Tuple[int, int]]
-        ] = {
-            (sx, sy): None
-        }
+        # Fallback pass: if start/goal sits near a narrow SLAM corridor boundary,
+        # route through any known-free cells (is_free_fn) so delivery/return never stalls.
+        if (gx, gy) not in came_from:
+            came_from = self._run_astar(
+                sx, sy, gx, gy, max_cx, max_cy, step, margin,
+                get_cost_fn, is_free_fn, is_near_wall_fn,
+                enforce_wall_margin=False,
+            )
 
-        g_score: dict[
-            Tuple[int, int],
-            float
-        ] = {
-            (sx, sy): 0.0
-        }
-
-        def heuristic(
-            a: Tuple[int, int],
-            b: Tuple[int, int]
-        ) -> float:
-
-            return (
-                abs(a[0] - b[0])
-                + abs(a[1] - b[1])
-            ) * COST_FREE
-
-        while open_set:
-
-            _, _, current = heapq.heappop(open_set)
-
-            if current == (gx, gy):
-                break
-
-            # 4-connected grid
-            for dx, dy in (
-                (1, 0),
-                (-1, 0),
-                (0, 1),
-                (0, -1),
-            ):
-
-                nx = current[0] + dx
-                ny = current[1] + dy
-
-                if not (
-                    0 <= nx < max_cx
-                    and 0 <= ny < max_cy
-                ):
-                    continue
-
-                px = nx * step + step // 2
-                py = ny * step + step // 2
-
-                # Static map obstacle
-                if not is_free_fn(px, py):
-                    continue
-
-                # Dynamic camera obstacle
-                if (nx, ny) in self._dynamic_blocked:
-                    continue
-
-                # Wall clearance
-                if is_near_wall_fn(
-                    px,
-                    py,
-                    margin
-                ):
-                    continue
-
-                move_cost = get_cost_fn(px, py)
-
-                tentative_g = (
-                    g_score[current]
-                    + move_cost
-                )
-
-                if (
-                    (nx, ny) not in g_score
-                    or tentative_g < g_score[(nx, ny)]
-                ):
-
-                    g_score[(nx, ny)] = tentative_g
-
-                    f_score = (
-                        tentative_g
-                        + heuristic(
-                            (nx, ny),
-                            (gx, gy)
-                        )
-                    )
-
-                    counter += 1
-
-                    heapq.heappush(
-                        open_set,
-                        (
-                            f_score,
-                            counter,
-                            (nx, ny)
-                        )
-                    )
-
-                    came_from[(nx, ny)] = current
-
-        # ======================================================
-        # RECONSTRUCT PATH
-        # ======================================================
-
-        path_cells: list[Tuple[int, int]] = []
-
-        node: Optional[Tuple[int, int]] = (
-            gx,
-            gy
-        )
-
+        node: Optional[Tuple[int, int]] = (gx, gy)
         if node not in came_from:
-
             self.path = []
-
             return self.path
 
+        path_cells: list[Tuple[int, int]] = []
         while node is not None:
-
             path_cells.append(node)
-
             node = came_from.get(node)
 
         path_cells.reverse()
-
         self.path = [
-            (
-                c[0] * step + step // 2,
-                c[1] * step + step // 2
-            )
+            (c[0] * step + step // 2, c[1] * step + step // 2)
             for c in path_cells
         ]
 
         self.path_index = 0
         self._arrived = False
-
+        self._pivoting = False
         self.replan_count += 1
-
-        print(
-            f"[Planner] Path planned: "
-            f"{len(self.path)} waypoints"
-        )
+        print(f"[Planner] Path planned: {len(self.path)} waypoints")
+        return self.path
 
         return self.path
 
@@ -600,7 +551,7 @@ class PathPlanner:
         # Also incorporate dynamic camera obstacles if present
         if obstacles:
             for obs in obstacles:
-                if obs.proximity > 0.15:
+                if obs.proximity > 0.15 and getattr(obs, "confidence", 0.0) >= 0.55:
                     bx, by, bw, bh = obs.bbox
                     cx_img = bx + bw / 2.0
                     rel_angle = ((cx_img - FRAME_W / 2.0) / (FRAME_W / 2.0)) * math.radians(PERCEPTION_HFOV_DEG / 2.0)
@@ -1024,8 +975,13 @@ class PathPlanner:
         # FINAL MOTOR PWM (Pivot vs Forward differential drive)
         # ======================================================
 
-        # Large heading error: pivot in place towards the waypoint
+        # Large heading error: pivot in place towards the waypoint with hysteresis
         if abs(angle_to_la) > 0.45:
+            self._pivoting = True
+        elif abs(angle_to_la) < 0.20:
+            self._pivoting = False
+
+        if self._pivoting:
             turn_pwm = 175
             if angle_to_la > 0:
                 # Target is to the right (desired > theta): pivot right

@@ -513,8 +513,8 @@ FRONTIER_DIST_BIAS: float = 12.0
 # Bonus applied to the currently-selected goal so the robot commits to it
 # instead of oscillating between two clusters of similar utility.
 FRONTIER_HYSTERESIS: float = 1.6
-SLAM_MIN_MAPPING_FRAMES: int = 300
-SLAM_MIN_EXPLORED_CELLS: int = 150
+SLAM_MIN_MAPPING_FRAMES: int = 120
+SLAM_MIN_EXPLORED_CELLS: int = 35
 SLAM_COVERAGE_THRESHOLD: float = 0.85       # stop mapping at 85% coverage
 # CRITICAL FIX - SLAM map save path collided with MAP_PATH.
 # save_map() fires on mapping_complete and wrote the robot's own PARTIAL

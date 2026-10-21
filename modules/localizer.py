@@ -143,7 +143,10 @@ class Localizer:
         predicted_state = np.array([
             self._state[0] + enc_dx,
             self._state[1] + enc_dy,
-            self._state[2] + enc_dtheta,
+            math.atan2(
+                math.sin(self._state[2] + enc_dtheta),
+                math.cos(self._state[2] + enc_dtheta),
+            ),
         ])
 
         # Jacobian of motion model F = ∂f/∂x (identity for additive model)
@@ -198,8 +201,10 @@ class Localizer:
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         if is_free_fn is not None:
             if not is_free_fn(int(predicted_state[0]), int(predicted_state[1])):
-                # Reject update — prevents EKF from walking through walls
-                # Increase uncertainty since we know the estimate is wrong
+                # Reject translation through wall, but ALWAYS preserve heading
+                # rotation (predicted_state[2]) so a robot near a wall can
+                # still rotate in place to escape.
+                self._state[2] = float(predicted_state[2])
                 self._P += np.diag([2.0, 2.0, 0.01])
                 self._update_public_state()
                 return self.get_state()

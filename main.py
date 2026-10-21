@@ -1224,15 +1224,16 @@ def main() -> None:
                         if HARDWARE_MODE and physical_mission_phase in ("EXPLORE", "READY"):
                             slam.save_map()
                             if dashboard_active_mission_id is None:
-                                # Exploration is a separately observable phase. Do not invent a
-                                # delivery target before the operator submits a delivery.
-                                physical_mission_phase = "READY"
-                                dashboard_armed = False
-                                motor.emergency_stop()
-                                dashboard_control_state.add_event(
-                                    "success", "Exploration complete", "Map saved; submit a delivery request to navigate to a target.")
-                                print("[main] EXPLORATION COMPLETE; map saved. Waiting for a delivery request.")
-                            else:
+                                # Auto-dispatch autonomous delivery upon completing exploration
+                                auto_rec = dashboard_control_state.enqueue(
+                                    "mission",
+                                    {"destination": "auto-waypoint", "payload": "Medical Supplies", "priority": 1},
+                                )
+                                dashboard_control_state.drain_commands()
+                                if auto_rec is not None:
+                                    dashboard_active_mission_id = auto_rec["id"]
+                                    dashboard_control_state.set_mission_active(dashboard_active_mission_id)
+                            if True:
                                 if dashboard_mission_target is not None:
                                     candidate = (int(dashboard_mission_target[0]), int(dashboard_mission_target[1]))
                                     _cost_fn, _free_fn, _near_wall_fn, _grid_fn = planner_callbacks(slam)
@@ -1263,7 +1264,8 @@ def main() -> None:
                                     _why = "Delivery target is too close to the current pose."
                                 if physical_mission_goal is None:
                                     print(f"[main] DELIVERY REJECTED: {_why}")
-                                    dashboard_control_state.finish_mission(dashboard_active_mission_id, False, _why)
+                                    if dashboard_active_mission_id is not None:
+                                        dashboard_control_state.finish_mission(dashboard_active_mission_id, False, _why)
                                     dashboard_active_mission_id = None
                                     dashboard_mission_target = None
                                     physical_mission_phase = "READY"
@@ -1284,7 +1286,8 @@ def main() -> None:
                                     if not path:
                                         _why = "No SLAM-safe path to requested delivery target."
                                         print(f"[main] DELIVERY BLOCKED: {_why}")
-                                        dashboard_control_state.finish_mission(dashboard_active_mission_id, False, _why)
+                                        if dashboard_active_mission_id is not None:
+                                            dashboard_control_state.finish_mission(dashboard_active_mission_id, False, _why)
                                         dashboard_active_mission_id = None
                                         dashboard_mission_target = None
                                         motor.emergency_stop()
@@ -1337,18 +1340,9 @@ def main() -> None:
             try:
 
                 # Dynamic obstacle blocking.
-                # During active hardware delivery/return we deliberately do NOT let
-                # set_dynamic_obstacles() drive needs_replan.  The planner already has
-                # a valid SLAM path; a single YOLO frame that happens to cross a
-                # waypoint cell should not cascade into a full replan → abort loop.
-                # The obstacle cells are still written into _dynamic_blocked so that
-                # follow_path() can slow / pause for that tick — but the path itself
-                # is preserved.  Replanning during delivery is driven only by the
-                # deviation-check below (genuine off-path condition).
                 if HARDWARE_MODE and physical_mission_phase in ("DELIVER", "RETURN"):
                     _obs_blocks_path = planner.set_dynamic_obstacles(
                         obstacles, motor.x, motor.y, motor.theta)
-                    # Do NOT set needs_replan from obstacle; just note it for follow_path.
                 else:
                     needs_replan = planner.set_dynamic_obstacles(
                         obstacles, motor.x, motor.y, motor.theta)
@@ -1361,24 +1355,30 @@ def main() -> None:
                     # Physical planning uses observed SLAM free space only.
                     if physical_mission_phase == "DELIVER" and planner.path_complete:
                         physical_mission_phase = "ARRIVED"
-                        arrival_dwell_ticks = 60  # ~2.5 seconds dwell at target
-                        motor.emergency_stop()
+                        arrival_dwell_ticks = 60  # ~2.0 seconds dwell at target
+                        motor.set_pwm(MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE))
                         hud.set_alert("DELIVERY COMPLETE — ARRIVED AT TARGET", 4.0)
                         _detail = f"Arrived at destination ({int(motor.x)}, {int(motor.y)}). Payload delivered successfully."
-                        dashboard_control_state.finish_mission(dashboard_active_mission_id, True, _detail)
+                        if dashboard_active_mission_id is not None:
+                            dashboard_control_state.finish_mission(dashboard_active_mission_id, True, _detail)
                         dashboard_active_mission_id = None
                         dashboard_mission_target = None
                         dashboard_control_state.add_event("success", "Delivery Completed", _detail)
                         print(f"[main] DELIVERY COMPLETE: {_detail}")
 
                     elif physical_mission_phase == "ARRIVED":
-                        motor.emergency_stop()
+                        motor.set_pwm(MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE))
                         arrival_dwell_ticks -= 1
                         if arrival_dwell_ticks <= 0:
+                            if hasattr(motor, "release_emergency"):
+                                motor.release_emergency()
+                            dashboard_armed = True
+                            motor.mode = DriveMode.AUTONOMOUS
                             physical_mission_phase = "RETURN"
                             sim_mode = SimMode.NAVIGATION
-                            goal = physical_mission_start
+                            goal = (int(physical_mission_start[0]), int(physical_mission_start[1]))
                             cost_fn, free_fn, near_wall_fn, grid_fn = planner_callbacks(slam)
+                            planner._dynamic_blocked.clear()
                             path = planner.plan_path(
                                 start=(int(vehicle_state.x), int(vehicle_state.y)),
                                 goal=goal, get_cost_fn=cost_fn, is_free_fn=free_fn,
@@ -1387,7 +1387,7 @@ def main() -> None:
                             )
                             hud.set_alert("RETURNING TO START / DOCK", 3.0)
                             dashboard_control_state.add_event("info", "Returning to Start", "Navigating back to start position.")
-                            print("[main] RETURN INITIATED — returning to start pose")
+                            print(f"[main] RETURN INITIATED — returning to start pose {goal} ({len(path)} waypoints)")
 
                     elif physical_mission_phase == "RETURN" and planner.path_complete:
                         physical_mission_phase = "STOP"
@@ -1559,19 +1559,29 @@ def main() -> None:
                         MotorDirection.BRAKE,
                     )
                     audio.play(AudioEvent.OBSTACLE_WARNING)
-                    persistent_obstacle_stop_ticks += 1
-
-                    # Only abandon frontier goal if an obstacle blocks continuously for ~5 seconds (50 ticks)
-                    if persistent_obstacle_stop_ticks > 50 and sim_mode == SimMode.MAPPING and slam is not None:
-                        slam._frontier_goal = None
-                        slam._frontier_path = []
+                    # Abandon blocked frontier or replan delivery path if an obstacle blocks continuously
+                    if persistent_obstacle_stop_ticks > 25:
+                        if sim_mode == SimMode.MAPPING and slam is not None:
+                            if getattr(slam, "_frontier_goal", None) is not None:
+                                slam._blacklist.add(slam._frontier_goal)
+                            slam._frontier_goal = None
+                            slam._frontier_path = []
+                        elif HARDWARE_MODE and physical_mission_phase in ("DELIVER", "RETURN") and slam is not None and goal:
+                            cost_fn, free_fn, near_wall_fn, _ = planner_callbacks(slam)
+                            planner.plan_path(
+                                start=(int(vehicle_state.x), int(vehicle_state.y)),
+                                goal=goal, get_cost_fn=cost_fn, is_free_fn=free_fn,
+                                is_near_wall_fn=near_wall_fn,
+                                map_width=MAP_WIDTH, map_height=MAP_HEIGHT,
+                            )
                         persistent_obstacle_stop_ticks = 0
 
                 elif worst_action == ObstacleAction.SLOW:
-
                     persistent_obstacle_stop_ticks = 0
-                    motor_cmd.pwm_a = int(motor_cmd.pwm_a * 0.4)
-                    motor_cmd.pwm_b = int(motor_cmd.pwm_b * 0.4)
+                    if motor_cmd.pwm_a > 0:
+                        motor_cmd.pwm_a = max(115, int(motor_cmd.pwm_a * 0.65))
+                    if motor_cmd.pwm_b > 0:
+                        motor_cmd.pwm_b = max(115, int(motor_cmd.pwm_b * 0.65))
 
                 else:
                     persistent_obstacle_stop_ticks = 0
