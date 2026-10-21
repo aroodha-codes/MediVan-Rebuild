@@ -110,6 +110,7 @@ class CameraHW:
         frame = self._source.read()
         if frame is not None:
             self._read_failures = 0
+            self._last_valid_frame = frame
             return frame
 
         self._read_failures += 1
@@ -117,6 +118,11 @@ class CameraHW:
             print("[Hardware] WARNING: camera read failed -- retrying")
         elif self._read_failures == 30:
             print("[Hardware] ERROR: camera stopped delivering frames.")
+
+        # Graceful fallback: return the last valid frame for up to 15 ticks (~1s)
+        # during transient buffer rotation or CPU spikes so the loop does not halt.
+        if self._read_failures < 15 and hasattr(self, "_last_valid_frame") and self._last_valid_frame is not None:
+            return self._last_valid_frame
         return None
 
     # ── main entry point ───────────────────────────────────────

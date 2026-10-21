@@ -670,7 +670,7 @@ def main() -> None:
             print("[dashboard-control] Hardware motion disarmed; choose Manual driving or Start mission.")
             print("[dashboard-control] (To start immediately without opening the dashboard, use: python3 -u main.py --start)")
             print("[dashboard-control] Manual mode is capped at PWM 175; it is operator-controlled and requires direct supervision.")
-    # <<< MEDIVAN DASHBOARD CONTROL (release candidate)
+    camera_consecutive_drops = 0
 
     try:
         while running:
@@ -1043,20 +1043,22 @@ def main() -> None:
 
                 )
 
-            except Exception:
-
+            except Exception as _cam_err:
+                print(f"[Camera] process_frame exception: {_cam_err}")
                 obstacles, dock_result, cam_frame = [], None, None
-
                 from config import DockResult
-
                 dock_result = DockResult()
 
-
-            if HARDWARE_MODE and cam_frame is None:
-                motor.emergency_stop()
-                print("[main] FATAL: camera frame unavailable; stopping hardware run.")
-                running = False
-                break
+            if HARDWARE_MODE:
+                if cam_frame is None:
+                    camera_consecutive_drops += 1
+                    if camera_consecutive_drops >= 30:
+                        motor.emergency_stop()
+                        print("[main] FATAL: camera frame unavailable for 30 consecutive ticks; stopping hardware run.")
+                        running = False
+                        break
+                else:
+                    camera_consecutive_drops = 0
 
             # Update greyscale buffers for optical flow
 
