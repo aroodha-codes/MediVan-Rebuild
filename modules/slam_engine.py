@@ -377,7 +377,7 @@ class SLAMEngine:
 
         if self._pivoting:
             err_mag = abs(err)
-            turn_pwm = int(max(PWM_DEADBAND + 55, min(165, 80 + err_mag * 65)))
+            turn_pwm = int(max(165, min(205, 155 + err_mag * 45)))
             if err > 0:
                 # Target is to the right (clockwise): left wheel FWD, right wheel REV
                 return MotorCommand(turn_pwm, turn_pwm,
@@ -585,15 +585,29 @@ class SLAMEngine:
                                 and mask[ny, nx] and not labels[ny, nx]):
                             labels[ny, nx] = cur
                             stack.append((nx, ny))
-            # Prefer frontier cells that are at least 1 step away from (gx, gy)
-            reachable = [(c, dist[c[1], c[0]]) for c in comp
-                         if dist[c[1], c[0]] > 0]
-            if not reachable:
+            # Prefer frontier cells that provide genuine forward exploration
+            # (at least 3 cells away from the robot reference point, i.e. >= 30 cm).
+            distant_reachable = [(c, dist[c[1], c[0]]) for c in comp
+                                 if dist[c[1], c[0]] >= 3]
+            if distant_reachable:
+                # Find cell in distant_reachable closest to the cluster's centroid
+                comp_xs = [c[0] for c in comp]
+                comp_ys = [c[1] for c in comp]
+                cx_mean = sum(comp_xs) / len(comp)
+                cy_mean = sum(comp_ys) / len(comp)
+                best_cell, best_d = min(
+                    distant_reachable,
+                    key=lambda t: math.hypot(t[0][0] - cx_mean, t[0][1] - cy_mean)
+                )
+            else:
                 reachable = [(c, dist[c[1], c[0]]) for c in comp
-                             if dist[c[1], c[0]] >= 0]
-            if not reachable:
-                continue
-            best_cell, best_d = min(reachable, key=lambda t: t[1])
+                             if dist[c[1], c[0]] > 0]
+                if not reachable:
+                    reachable = [(c, dist[c[1], c[0]]) for c in comp
+                                 if dist[c[1], c[0]] >= 0]
+                if not reachable:
+                    continue
+                best_cell, best_d = max(reachable, key=lambda t: t[1])
             clusters.append((len(comp), best_cell, int(best_d)))
 
         if not clusters:
@@ -617,6 +631,9 @@ class SLAMEngine:
             # Mutual Information Gain: expected entropy reduction in unmapped footprint + size
             info_gain = float(np.sum(local_entropy * local_unknown)) + 0.25 * size
             u = info_gain / (d + FRONTIER_DIST_BIAS)
+            # Suppress ultra-close frontiers under our wheels when deeper frontiers exist
+            if d < 3:
+                u *= 0.15
             if self._frontier_goal is not None and cell == self._frontier_goal:
                 u *= FRONTIER_HYSTERESIS      # commit to the current target
             if u > best_u:

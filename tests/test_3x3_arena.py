@@ -298,3 +298,42 @@ def test_full_autonomous_cycle_explore_obstacle_deliver_return():
     assert math.hypot(rx - start_x, ry - start_y) <= LOOKAHEAD_DIST_PX
 
 
+def test_3x3_frontier_minimum_distance_anti_thrash(clean_3x3_slam):
+    """Ensure SLAM selects frontiers >= 3 cells away to force sustained forward travel."""
+    slam = clean_3x3_slam
+    res = SLAM_GRID_RESOLUTION
+
+    # Simulate free space surrounding robot at (40, 30) extending out 6 cells in +X direction
+    for dx in range(-2, 7):
+        for dy in range(-2, 3):
+            gx, gy = 40 + dx, 30 + dy
+            slam.grid[gy, gx] = -1.5
+            slam._visited[gy, gx] = True
+
+    goal, path = slam._select_frontier_goal(40, 30, slam._grid_is_free)
+    assert goal is not None, "A valid frontier goal must be selected"
+    assert len(path) >= 3, f"Path must be >= 3 cells to drive forward (got {len(path)})"
+    # Ensure goal is not immediately adjacent (d >= 3)
+    dist_cells = math.hypot(goal[0] - 40, goal[1] - 30)
+    assert dist_cells >= 2.5, f"Goal should provide forward exploration (got {dist_cells:.1f} cells)"
+
+
+def test_3x3_pivot_pwm_floor_torque(clean_3x3_slam):
+    """Verify pivot PWM is at least 165 on both SLAMEngine and PathPlanner for physical floor torque."""
+    slam = clean_3x3_slam
+    # Target directly to the left (90 deg heading error)
+    slam._frontier_path = [(40, 35), (40, 36)]
+    slam._frontier_idx = 0
+    slam._frontier_goal = (40, 36)
+    cmd_explore_pivot = slam.get_explore_command(400.0, 300.0, 0.0)
+    assert cmd_explore_pivot.dir_a != cmd_explore_pivot.dir_b
+    assert cmd_explore_pivot.pwm_a >= 165, f"SLAM pivot PWM must overcome floor friction (got {cmd_explore_pivot.pwm_a})"
+
+    planner = PathPlanner()
+    planner.path = [(400, 300), (300, 300)]  # 180 deg behind
+    state = VehicleState(x=400.0, y=300.0, theta=0.0)
+    cmd_plan_pivot = planner.follow_path(state)
+    assert cmd_plan_pivot.dir_a != cmd_plan_pivot.dir_b
+    assert cmd_plan_pivot.pwm_a >= 165, f"Planner pivot PWM must overcome floor friction (got {cmd_plan_pivot.pwm_a})"
+
+

@@ -983,8 +983,8 @@ class PathPlanner:
 
         if self._pivoting:
             err_mag = abs(angle_to_la)
-            # Proportional pivot deceleration so robot settles cleanly without overshoot
-            turn_pwm = int(max(PWM_DEADBAND + 55, min(165, 80 + err_mag * 65)))
+            # Ensure sufficient torque to overcome floor friction on physical hardware
+            turn_pwm = int(max(165, min(205, 155 + err_mag * 45)))
             if angle_to_la > 0:
                 # Target is to the right (desired > theta): pivot right
                 return MotorCommand(turn_pwm, turn_pwm,
