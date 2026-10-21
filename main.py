@@ -1551,37 +1551,38 @@ def main() -> None:
 
             if motor.mode == DriveMode.AUTONOMOUS:
 
-
-
                 worst_action = ObstacleAction.NOMINAL
-
-
+                closest_proximity = 0.0
+                closest_area = 0.0
+                hazard_label = ""
 
                 for obs in obstacles:
 
-                    # Only act on high-confidence detections to suppress
-                    # false STOP events on clear hospital floor texture.
-                    if obs.confidence < 0.65:
+                    # Act on valid detections from YOLO (confidence >= 0.40)
+                    if getattr(obs, "confidence", 0.0) < 0.40:
                         continue
 
-                    if obs.action == ObstacleAction.STOP:
+                    prox = getattr(obs, "proximity", 0.0)
+                    area = getattr(obs, "area_ratio", 0.0)
+                    if prox > closest_proximity:
+                        closest_proximity = prox
+                        hazard_label = str(getattr(obs, "classification", "hazard"))
+                    if area > closest_area:
+                        closest_area = area
 
+                    if getattr(obs, "action", None) == ObstacleAction.STOP:
                         worst_action = ObstacleAction.STOP
-
                         break
 
-
-
-                    elif obs.action == ObstacleAction.SLOW:
-
+                    elif getattr(obs, "action", None) == ObstacleAction.SLOW:
                         worst_action = ObstacleAction.SLOW
 
-
-
-                if worst_action == ObstacleAction.STOP:
+                # Immediate emergency stop on STOP action or close bumper hazard (proximity >= 0.68)
+                if worst_action == ObstacleAction.STOP or closest_proximity >= 0.68 or closest_area >= 0.13:
 
                     from config import MotorDirection
 
+                    persistent_obstacle_stop_ticks += 1
                     motor_cmd = MotorCommand(
                         0,
                         0,
@@ -1589,6 +1590,9 @@ def main() -> None:
                         MotorDirection.BRAKE,
                     )
                     audio.play(AudioEvent.OBSTACLE_WARNING)
+                    if persistent_obstacle_stop_ticks % 15 == 1:
+                        print(f"[AI SAFETY] STOP: hazard={hazard_label} prox={closest_proximity:.2f} area={closest_area:.2f}")
+
                     # Abandon blocked frontier or replan delivery path if an obstacle blocks continuously
                     if persistent_obstacle_stop_ticks > 25:
                         if sim_mode == SimMode.MAPPING and slam is not None:
@@ -1608,13 +1612,24 @@ def main() -> None:
 
                 elif worst_action == ObstacleAction.SLOW:
                     persistent_obstacle_stop_ticks = 0
+                    # For SLOW, decelerate smoothly while staying above motor stall floor (150 PWM)
                     if motor_cmd.pwm_a > 0:
-                        motor_cmd.pwm_a = max(115, int(motor_cmd.pwm_a * 0.65))
+                        motor_cmd.pwm_a = max(150, int(motor_cmd.pwm_a * 0.75))
                     if motor_cmd.pwm_b > 0:
-                        motor_cmd.pwm_b = max(115, int(motor_cmd.pwm_b * 0.65))
+                        motor_cmd.pwm_b = max(150, int(motor_cmd.pwm_b * 0.75))
 
                 else:
                     persistent_obstacle_stop_ticks = 0
+
+            elif motor.mode == DriveMode.MANUAL:
+                from config import MotorDirection
+                # If obstacle is immediately in front (< 45cm), veto forward manual drive
+                for obs in obstacles:
+                    if getattr(obs, "confidence", 0.0) >= 0.40 and (getattr(obs, "proximity", 0.0) >= 0.68 or getattr(obs, "area_ratio", 0.0) >= 0.13):
+                        if motor_cmd.dir_a == MotorDirection.FWD or motor_cmd.dir_b == MotorDirection.FWD:
+                            motor_cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
+                            audio.play(AudioEvent.OBSTACLE_WARNING)
+                            break
 
 
 

@@ -141,13 +141,11 @@ class CameraHW:
         if frame is None:
             return [], None, None
 
-        # 1. AI obstacle detection (YOLOv8n ONNX throttled to every 3rd frame to sustain 15+ FPS)
+        # 1. AI obstacle detection (YOLO ONNX throttled internally by detector.detect)
         self._frame_count += 1
-        obstacles = self._cached_obstacles
+        obstacles = []
         try:
-            if self._frame_count % 3 == 1 or not self._cached_obstacles:
-                self._cached_obstacles = self.detector.detect(frame)
-            obstacles = self._cached_obstacles
+            obstacles = self.detector.detect(frame)
         except Exception as det_err:
             print(f"[AI] Detector error: {det_err}")
 

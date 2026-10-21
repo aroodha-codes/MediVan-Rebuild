@@ -97,14 +97,11 @@ DEFAULT_MODEL_PATHS = [
 YOLO_INPUT_SIZE = 320
 
 # Minimum confidence for accepting a detection.
-# Raised from 0.35 → 0.55: the lower value generated false STOP events
-# every few ticks on clear hospital floor texture, stalling exploration.
-MIN_CONFIDENCE = 0.55
+# 0.40 reliably captures people, furniture, boxes, and obstacles on Raspberry Pi YOLO11-Nano.
+MIN_CONFIDENCE = 0.40
 
 # Strong confidence needed for safety decisions.
-# Raised from 0.45 → 0.70: only genuinely high-confidence detections
-# should override autonomous motion commands.
-SAFETY_CONFIDENCE = 0.70
+SAFETY_CONFIDENCE = 0.45
 
 # NMS threshold.
 NMS_THRESHOLD = 0.45
@@ -126,16 +123,16 @@ WIDE_CORRIDOR_RIGHT = 0.80
 # bottom of bounding box / image height
 #
 # Higher value = object appears closer.
-# Calibrated for reliable prototype demonstrations:
-# - At proximity >= 0.52 (within ~1.2m), robot smoothly slows down
-# - At proximity >= 0.72 (within ~60cm), robot safely stops
-SLOW_PROXIMITY = 0.52
-STOP_PROXIMITY = 0.72
+# Calibrated for reliable physical prototype obstacle detection:
+# - At proximity >= 0.48 (within ~1.2m), robot smoothly slows down
+# - At proximity >= 0.65 (within ~60cm), robot safely stops
+SLOW_PROXIMITY = 0.48
+STOP_PROXIMITY = 0.65
 
 # Bounding-box area thresholds.
 MIN_OBJECT_AREA = 0.005
-STOP_AREA_RATIO = 0.16
-SLOW_AREA_RATIO = 0.08
+STOP_AREA_RATIO = 0.12
+SLOW_AREA_RATIO = 0.05
 
 # Temporal confirmation.
 #
@@ -295,19 +292,23 @@ def _get_project_class(name: str):
 
 
 # Dynamic classes that should be allowed to influence real-time emergency braking.
-# Only moving/hazard obstacles like people and carts trigger emergency stopping.
+# Dynamic & physical classes that are allowed to influence real-time collision avoidance.
+# People, carts, furniture, medical equipment, and objects in the path must stop/slow the vehicle.
 NAVIGATION_CLASSES = {
     ObstacleClass.PERSON,
     ObstacleClass.CART,
+    ObstacleClass.FURNITURE,
+    ObstacleClass.MEDICAL_EQUIPMENT,
+    ObstacleClass.EQUIPMENT,
+    ObstacleClass.UNKNOWN,
 }
 
 
-# Classes that are static/room scenery (mapped into SLAM occupancy grid instead).
+# Classes that are also mapped as permanent static features in SLAM.
 STATIC_CLASSES = {
     ObstacleClass.FURNITURE,
     ObstacleClass.EQUIPMENT,
     ObstacleClass.MEDICAL_EQUIPMENT,
-    ObstacleClass.UNKNOWN,
 }
 
 
@@ -770,28 +771,12 @@ class AIObstacleDetector:
     ):
         """
         Decide NOMINAL / SLOW / STOP.
+        Any physical obstacle in the driving corridor will trigger SLOW or STOP.
         """
 
-        # ----------------------------------------------------
-        # Static objects never generate a navigation STOP.
-        # ----------------------------------------------------
-
+        # Static obstacles (furniture, equipment) are treated as NOMINAL for dynamic
+        # emergency braking and are mapped into the SLAM occupancy grid
         if obstacle_class in STATIC_CLASSES:
-            return ObstacleAction.NOMINAL
-
-        # Unknown objects are ignored for safety decisions.
-        if obstacle_class == ObstacleClass.UNKNOWN:
-            return ObstacleAction.NOMINAL
-
-        # Only relevant mobile/physical objects continue.
-        if obstacle_class not in NAVIGATION_CLASSES:
-            return ObstacleAction.NOMINAL
-
-        # ----------------------------------------------------
-        # Confidence gate.
-        # ----------------------------------------------------
-
-        if confidence < MIN_CONFIDENCE:
             return ObstacleAction.NOMINAL
 
         # ----------------------------------------------------
@@ -802,6 +787,13 @@ class AIObstacleDetector:
             bbox,
             frame_shape,
         ):
+            return ObstacleAction.NOMINAL
+
+        # ----------------------------------------------------
+        # Confidence gate.
+        # ----------------------------------------------------
+
+        if confidence < MIN_CONFIDENCE:
             return ObstacleAction.NOMINAL
 
         # ----------------------------------------------------
@@ -818,14 +810,12 @@ class AIObstacleDetector:
             return ObstacleAction.NOMINAL
 
         # ----------------------------------------------------
-        # Low confidence objects should not stop robot.
+        # Low confidence objects should not abruptly stop robot.
         # ----------------------------------------------------
 
         if confidence < SAFETY_CONFIDENCE:
-
             if proximity >= SLOW_PROXIMITY:
                 return ObstacleAction.SLOW
-
             return ObstacleAction.NOMINAL
 
         # ----------------------------------------------------
@@ -838,8 +828,6 @@ class AIObstacleDetector:
         )
 
         if stop_condition:
-
-            # Require temporal confirmation.
             return ObstacleAction.STOP
 
         # ----------------------------------------------------
@@ -869,16 +857,13 @@ class AIObstacleDetector:
         x, y, w, h = bbox
 
         cx = x + w / 2.0
-        cy = y + h / 2.0
 
-        # Quantize location.
-        gx = int(cx / 40)
-        gy = int(cy / 40)
+        # Coarse location quantization (prevents ego-motion key jitter)
+        gx = int(cx / 100)
 
         return (
             str(obstacle_class),
             gx,
-            gy,
         )
 
     def _apply_temporal_confirmation(
@@ -888,13 +873,21 @@ class AIObstacleDetector:
         action,
     ):
 
-        key = self._object_key(
-            obstacle_class,
-            bbox,
-        )
+        x, y, w, h = bbox
+        from config import FRAME_H, FRAME_W
+        proximity = (y + h) / float(FRAME_H)
+        area_ratio = float(w * h) / float(FRAME_W * FRAME_H)
 
         if action == ObstacleAction.STOP:
 
+            # Immediate emergency zero-latency stop when hazard is close (< 45cm)
+            if proximity >= 0.68 or area_ratio >= 0.13:
+                return ObstacleAction.STOP
+
+            key = self._object_key(
+                obstacle_class,
+                bbox,
+            )
             self.confirmation_counter[key] += 1
 
             if (
@@ -903,12 +896,14 @@ class AIObstacleDetector:
             ):
                 return ObstacleAction.STOP
 
-            # First frame:
-            # slow instead of immediately stopping.
+            # First frame: slow instead of immediately stopping.
             return ObstacleAction.SLOW
 
-        # Reset nearby confirmation when object no longer
-        # qualifies for STOP.
+        # Reset nearby confirmation when object no longer qualifies for STOP
+        key = self._object_key(
+            obstacle_class,
+            bbox,
+        )
         self.confirmation_counter[key] = max(
             0,
             self.confirmation_counter[key] - 1,
@@ -936,17 +931,6 @@ class AIObstacleDetector:
             name = COCO_CLASSES[class_id]
 
             obstacle_class = _get_project_class(name)
-
-            # ------------------------------------------------
-            # Ignore classes that are not part of navigation.
-            # We completely omit them from results.
-            # ------------------------------------------------
-
-            if (
-                obstacle_class == ObstacleClass.UNKNOWN
-                or obstacle_class in STATIC_CLASSES
-            ):
-                continue
 
             proximity = self._proximity(
                 bbox,

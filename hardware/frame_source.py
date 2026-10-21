@@ -93,10 +93,16 @@ class _Picamera2Source(FrameSource):
         from picamera2 import Picamera2 # type: ignore
 
         self._picam = Picamera2()
-        config = self._picam.create_video_configuration(
-            main={"size": (FRAME_W, FRAME_H), "format": "RGB888"},
-            buffer_count=4,
-        )
+        try:
+            config = self._picam.create_video_configuration(
+                main={"size": (FRAME_W, FRAME_H), "format": "BGR888"},
+                buffer_count=4,
+            )
+        except Exception:
+            config = self._picam.create_video_configuration(
+                main={"size": (FRAME_W, FRAME_H), "format": "RGB888"},
+                buffer_count=4,
+            )
         self._picam.configure(config)
         self._picam.start()
         time.sleep(_WARMUP_S)

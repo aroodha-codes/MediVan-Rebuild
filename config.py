@@ -422,7 +422,7 @@ YOLO_MODEL_PATH: str = "assets/yolo11n.onnx" if os.path.exists(os.path.join(os.p
 YOLO_INPUT_SIZE: int = 320                  # must match the ONNX export size
 YOLO_CONF_THRESHOLD: float = 0.35
 YOLO_NMS_THRESHOLD: float = 0.45
-YOLO_SKIP_FRAMES: int = 5                   # run inference every Nth frame
+YOLO_SKIP_FRAMES: int = 3                   # run inference every 3rd frame (~5-10 Hz)
 
 # ════════════════════════════════════════════════
 # LOGGING

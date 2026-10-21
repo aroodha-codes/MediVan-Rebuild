@@ -92,6 +92,7 @@ from config import (
     PERCEPTION_DROPOUT_PROB, CAMERA_HEIGHT_M, CAMERA_PITCH_RAD,
     CAMERA_FX, CAMERA_FY, CAMERA_CX, CAMERA_CY,
     MAP_SCALE_M_PER_PX, FRAME_W, FRAME_H, CAMERA_FORWARD_OFFSET_M,
+    SLAM_FREE_RANGE_NO_HIT,
 )
 
 
@@ -360,14 +361,13 @@ class CameraPerceptionSource(PerceptionSource):
     @staticmethod
     def segment_floor(frame: np.ndarray,
                       sample_rows: int = 35,
-                      tol: float = 3.5) -> np.ndarray:
-        """Illumination-tolerant indoor floor segmentation:
+                      tol: float = 2.6) -> np.ndarray:
+        """Illumination-tolerant indoor floor segmentation with edge gating:
         1. Reference sampling avoids robot bumper/castor/shadow at bottom 18 rows.
-        2. Lab colour space with wide Luminance (L) std floor (42.0) to absorb
-           overhead lighting falloff and corridor shadows, and chromaticity (a, b)
-           std floor (12.0) to tolerate floor reflections while rejecting walls/obstacles.
-        3. Morphological opening (3x3) and vertical closing (5x9) bridge tile seams.
-        4. Immediate near-bumper rows are treated as clear.
+        2. Lab colour space with realistic Luminance std floor (18.0) and Chroma (6.0)
+           to detect real obstacles and walls while tolerating normal floor lighting.
+        3. Canny edge detector gates non-floor obstacle boundaries and baseboards.
+        4. Morphological opening and closing bridge tile seams.
         """
         import cv2
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
@@ -379,20 +379,27 @@ class CameraPerceptionSource(PerceptionSource):
         ref = lab[y_start:y_end, x_start:x_end, :]
         mu = ref.mean(axis=(0, 1))
 
-        # Decouple Luminance (L) tolerance from Chroma (a, b)
-        sd_L = max(float(ref[:, :, 0].std()), 42.0)
-        sd_a = max(float(ref[:, :, 1].std()), 12.0)
-        sd_b = max(float(ref[:, :, 2].std()), 12.0)
+        # Balanced standard deviations: sensitive to real obstacles and walls
+        sd_L = max(float(ref[:, :, 0].std()), 18.0)
+        sd_a = max(float(ref[:, :, 1].std()), 6.0)
+        sd_b = max(float(ref[:, :, 2].std()), 6.0)
         sd = np.array([sd_L, sd_a, sd_b], dtype=np.float32)
 
         dev = np.abs(lab.astype(np.float32) - mu) / sd
         raw_mask = np.all(dev < tol, axis=2).astype(np.uint8)
 
+        # High-contrast edge detection to catch walls and obstacle bases
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 40, 110)
+        k_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        edge_mask = cv2.dilate(edges, k_edge)
+        raw_mask[edge_mask > 0] = 0
+
         # 3x3 open removes isolated speckle noise
         k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         mask_open = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, k_open)
 
-        # 5x9 vertical close bridges grout lines, tile seams and reflections
+        # 5x9 vertical close bridges grout lines and tile seams
         k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
         mask_clean = cv2.morphologyEx(mask_open, cv2.MORPH_CLOSE, k_close)
 
@@ -512,7 +519,9 @@ class CameraPerceptionSource(PerceptionSource):
             elif clear_bins[k]:
                 # No return is valid free-space evidence only where a column
                 # in this specific angular bin saw floor to the horizon.
+                # Clamp to conservative SLAM_FREE_RANGE_NO_HIT (40 px) to avoid fabricating map
                 valid[k] = True
+                ranges[k] = float(min(PERCEPTION_MAX_RANGE_PX, SLAM_FREE_RANGE_NO_HIT))
 
         return RangeScan(angles, ranges, hit, valid,
                          float(PERCEPTION_MAX_RANGE_PX), scan_pose)

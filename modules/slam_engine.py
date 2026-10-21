@@ -172,13 +172,38 @@ class SLAMEngine:
                 if 0 <= gx_g < _GW and 0 <= gy_g < _GH:
                     frees.append((gx_g, gy_g))
 
+        # Incorporate YOLO-detected physical obstacles into SLAM occupancy grid
+        if ai_results:
+            rx_cell, ry_cell = int(robot_x) // res, int(robot_y) // res
+            fov_rad = math.radians(SLAM_CAMERA_FOV_DEG)
+            for obs in ai_results:
+                conf = getattr(obs, "confidence", 0.0)
+                prox = getattr(obs, "proximity", 0.0)
+                act = getattr(obs, "action", None)
+                if conf >= 0.40 and (prox >= 0.45 or act in (ObstacleAction.SLOW, ObstacleAction.STOP)):
+                    bx, by, bw, bh = obs.bbox
+                    cx = bx + bw / 2.0
+                    angle_offset = (cx / float(FRAME_W) - 0.5) * fov_rad
+                    global_angle = robot_theta + angle_offset
+                    p_clamped = max(0.1, min(1.0, float(prox)))
+                    dist_px = max(10, min(SLAM_CAMERA_RANGE_PX, (1.0 - p_clamped) * 110.0 + 15.0))
+                    ox = robot_x + dist_px * math.cos(global_angle)
+                    oy = robot_y + dist_px * math.sin(global_angle)
+                    gx_o, gy_o = int(ox) // res, int(oy) // res
+                    if 0 <= gx_o < _GW and 0 <= gy_o < _GH:
+                        walls.append((gx_o, gy_o))
+                        for dox in (-1, 0, 1):
+                            for doy in (-1, 0, 1):
+                                if 0 <= gx_o + dox < _GW and 0 <= gy_o + doy < _GH:
+                                    walls.append((gx_o + dox, gy_o + doy))
 
         # On hardware / real-camera (no ground-truth map), guard against floor
         # glare/shadows starving frontier generation when no obstacle is present:
         has_stop_obstacle = bool(
             ai_results and any(
-                getattr(o, "action", None) == ObstacleAction.STOP
-                and getattr(o, "confidence", 0.0) >= 0.65
+                (getattr(o, "action", None) in (ObstacleAction.STOP, ObstacleAction.SLOW)
+                 or getattr(o, "proximity", 0.0) >= 0.60)
+                and getattr(o, "confidence", 0.0) >= 0.40
                 for o in ai_results
             )
         )

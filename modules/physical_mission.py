@@ -116,10 +116,7 @@ def select_reachable_destination(slam, start_x: float, start_y: float,
     candidates = [(d, cell) for cell, d in dist.items()
                   if d * res >= min_distance_px]
     if not candidates:
-        candidates = [(d, cell) for cell, d in dist.items() if d * res >= 15]
-    if not candidates:
-        candidates = [(d, cell) for cell, d in dist.items() if d > 0]
-    if not candidates:
         return None
     _, (gx, gy) = max(candidates, key=lambda item: item[0])
     return gx * res + res // 2, gy * res + res // 2
+
