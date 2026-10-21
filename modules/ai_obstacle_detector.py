@@ -81,8 +81,12 @@ except Exception:
 # SETTINGS
 # ============================================================
 
-# YOLO model location.
+# YOLO model location (supports YOLO11-Nano and YOLOv8-Nano).
 DEFAULT_MODEL_PATHS = [
+    "assets/yolo11n.onnx",
+    "models/yolo11n.onnx",
+    "yolo11n.onnx",
+    "models/yolo/yolo11n.onnx",
     "assets/yolov8n.onnx",
     "models/yolov8n.onnx",
     "yolov8n.onnx",
@@ -415,7 +419,8 @@ class AIObstacleDetector:
 
         try:
 
-            print(f"[AI] Loading YOLO model: {model_path}")
+            model_name = "YOLO11-Nano" if "yolo11" in model_path.lower() else "YOLOv8"
+            print(f"[AI] Loading {model_name} model: {model_path}")
 
             self.net = cv2.dnn.readNetFromONNX(model_path)
 
@@ -426,7 +431,7 @@ class AIObstacleDetector:
             self.model_loaded = True
             self.using_heuristic = False
 
-            print("[AI] YOLO model loaded successfully.")
+            print(f"[AI] {model_name} model loaded successfully.")
 
         except Exception as e:
 

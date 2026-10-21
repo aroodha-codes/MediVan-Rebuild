@@ -522,10 +522,24 @@ class SLAMEngine:
         if not clusters:
             return None, []
 
-        # -- utility scoring --------------------------------------------
+        # -- information-theoretic utility scoring (Shannon Entropy Reduction) --
+        # Probability of occupancy from log-odds grid: p = 1.0 / (1.0 + exp(-grid))
+        # Shannon entropy H(p) = -p*log2(p) - (1-p)*log2(1-p)
+        p_grid = 1.0 / (1.0 + np.exp(-np.clip(self.grid, -10.0, 10.0)))
+        entropy_grid = self.shannon_entropy(p_grid)
+        unknown_mask = np.abs(self.grid) <= 0.3
+
         best_u, best = -1.0, None
         for size, cell, d in clusters:
-            u = size / (d + FRONTIER_DIST_BIAS)
+            cx, cy = cell
+            x_min, x_max = max(0, cx - 6), min(w, cx + 7)
+            y_min, y_max = max(0, cy - 6), min(h, cy + 7)
+            local_entropy = entropy_grid[y_min:y_max, x_min:x_max]
+            local_unknown = unknown_mask[y_min:y_max, x_min:x_max]
+
+            # Mutual Information Gain: expected entropy reduction in unmapped footprint + size
+            info_gain = float(np.sum(local_entropy * local_unknown)) + 0.25 * size
+            u = info_gain / (d + FRONTIER_DIST_BIAS)
             if self._frontier_goal is not None and cell == self._frontier_goal:
                 u *= FRONTIER_HYSTERESIS      # commit to the current target
             if u > best_u:
@@ -896,6 +910,18 @@ class SLAMEngine:
             return self.grid[gy, gx] < -0.3
         return False
 
+    @staticmethod
+    def shannon_entropy(p: np.ndarray) -> np.ndarray:
+        """Compute binary Shannon entropy H(p) in bits."""
+        p_clamped = np.clip(p, 1e-6, 1.0 - 1e-6)
+        return -p_clamped * np.log2(p_clamped) - (1.0 - p_clamped) * np.log2(1.0 - p_clamped)
+
+    def get_map_entropy(self) -> float:
+        """Calculate mean Shannon entropy across the SLAM occupancy grid in bits."""
+        p = 1.0 / (1.0 + np.exp(-np.clip(self.grid, -10.0, 10.0)))
+        h = self.shannon_entropy(p)
+        return float(np.mean(h))
+
     def get_stats(self) -> dict:
         """Return SLAM statistics."""
         return {
@@ -909,6 +935,7 @@ class SLAMEngine:
             "wall_cells": int(np.sum(self.grid > 0.5)),
             "frames": self.frame_count,
             "complete": self.mapping_complete,
+            "mean_entropy_bits": round(self.get_map_entropy(), 3),
         }
 
 

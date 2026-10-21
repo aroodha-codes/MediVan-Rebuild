@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from typing import Callable, List, Optional, Tuple
+import numpy as np
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -50,6 +51,7 @@ from config import (
 
     FRAME_W,
     FRAME_H,
+    PERCEPTION_HFOV_DEG,
 
     CellType,
     MotorCommand,
@@ -541,7 +543,106 @@ class PathPlanner:
         return blocks_path
 
     # ==========================================================
-    # PURE PURSUIT PATH FOLLOWING
+    # VECTOR FIELD HISTOGRAM PLUS (VFH+) LOCAL STEERING
+    # ==========================================================
+
+    def compute_vfh_plus_steering(
+        self,
+        vx: float,
+        vy: float,
+        vtheta: float,
+        target_x: float,
+        target_y: float,
+        grid_fn: Optional[Callable[[int, int], CellType]] = None,
+        obstacles: Optional[List[ObstacleResult]] = None,
+        window_radius_px: int = 50,
+        num_sectors: int = 36,
+    ) -> Tuple[float, float]:
+        """Vector Field Histogram Plus (VFH+) local obstacle avoidance.
+
+        Evaluates polar obstacle density around the vehicle and finds candidate
+        collision-free angular valleys to smoothly steer around dynamic and
+        static obstacles while tracking toward the target waypoint.
+
+        Returns
+        -------
+        Tuple[float, float]:
+            chosen_heading: Selected collision-free steering heading (radians).
+            speed_factor: Suggested velocity scaling factor in [0.0, 1.0].
+        """
+        target_heading = math.atan2(target_y - vy, target_x - vx)
+        sector_size = (2.0 * math.pi) / num_sectors
+        pod = np.zeros(num_sectors, dtype=np.float32)
+
+        # 1. Accumulate static obstacles from grid within local window
+        step = CELL_SIZE_PX
+        r_cells = max(1, window_radius_px // step)
+        gx, gy = int(vx) // step, int(vy) // step
+
+        if grid_fn is not None:
+            for dy in range(-r_cells, r_cells + 1):
+                for dx in range(-r_cells, r_cells + 1):
+                    cx, cy = (gx + dx) * step + step // 2, (gy + dy) * step + step // 2
+                    cell_type = grid_fn(cx, cy)
+                    if cell_type == CellType.WALL or (gx + dx, gy + dy) in self._dynamic_blocked:
+                        dist = math.hypot(cx - vx, cy - vy)
+                        if 0 < dist <= window_radius_px:
+                            # Linear distance attenuation: closer obstacles have higher density
+                            mag = max(0.0, 1.0 - (dist / window_radius_px)) * 1.5
+                            bearing = math.atan2(cy - vy, cx - vx)
+                            sec = int(round((bearing + math.pi) / sector_size)) % num_sectors
+                            pod[sec] += mag
+                            pod[(sec - 1) % num_sectors] += mag * 0.5
+                            pod[(sec + 1) % num_sectors] += mag * 0.5
+
+        # Also incorporate dynamic camera obstacles if present
+        if obstacles:
+            for obs in obstacles:
+                if obs.proximity > 0.15:
+                    bx, by, bw, bh = obs.bbox
+                    cx_img = bx + bw / 2.0
+                    rel_angle = ((cx_img - FRAME_W / 2.0) / (FRAME_W / 2.0)) * math.radians(PERCEPTION_HFOV_DEG / 2.0)
+                    obs_heading = vtheta + rel_angle
+                    mag = float(obs.proximity) * 2.0
+                    sec = int(round((obs_heading + math.pi) / sector_size)) % num_sectors
+                    pod[sec] += mag
+                    pod[(sec - 1) % num_sectors] += mag * 0.5
+                    pod[(sec + 1) % num_sectors] += mag * 0.5
+
+        # 2. Check if the target heading is unobstructed
+        target_sec = int(round((target_heading + math.pi) / sector_size)) % num_sectors
+        threshold = 0.25
+
+        target_blocked = any(pod[(target_sec + offset) % num_sectors] > threshold for offset in (-1, 0, 1))
+
+        if not target_blocked:
+            speed_factor = 1.0 if pod[target_sec] < 0.10 else 0.85
+            return target_heading, speed_factor
+
+        # 3. Path is obstructed: Find free valleys in forward semicircle
+        valleys = []
+        for sec in range(num_sectors):
+            sec_heading = sec * sector_size - math.pi
+            heading_diff = abs(math.atan2(math.sin(sec_heading - vtheta), math.cos(sec_heading - vtheta)))
+            if heading_diff <= math.pi * 0.50:
+                if pod[sec] <= threshold:
+                    valleys.append((sec, sec_heading))
+
+        if not valleys:
+            return target_heading, 0.0
+
+        # 4. Choose valley with minimum deviation from target heading and current orientation
+        def valley_cost(item):
+            sec, sec_h = item
+            target_err = abs(math.atan2(math.sin(sec_h - target_heading), math.cos(sec_h - target_heading)))
+            steer_effort = abs(math.atan2(math.sin(sec_h - vtheta), math.cos(sec_h - vtheta)))
+            return target_err + 0.35 * steer_effort
+
+        best_sec, best_heading = min(valleys, key=valley_cost)
+        return best_heading, 0.65
+
+    # ==========================================================
+    # PURE PURSUIT PATH FOLLOWING WITH VFH+ LOCAL OBSTACLE SHIELD
     # ==========================================================
 
     def follow_path(
@@ -599,7 +700,7 @@ class PathPlanner:
                 break
 
         # ------------------------------------------------------
-        # Lookahead waypoint
+        # Lookahead waypoint & VFH+ local steering
         # ------------------------------------------------------
 
         la_idx = min(
@@ -611,21 +712,21 @@ class PathPlanner:
             la_idx
         ]
 
-        # ------------------------------------------------------
-        # Angle to lookahead
-        # ------------------------------------------------------
-
-        angle_to_la = (
-            math.atan2(
-                la_y - vy,
-                la_x - vx
-            )
-            - vtheta
+        # Vector Field Histogram Plus (VFH+) computes the collision-free steering heading
+        steer_heading, self._vfh_speed_factor = self.compute_vfh_plus_steering(
+            vx, vy, vtheta, la_x, la_y, grid_fn=grid_fn, obstacles=obstacles
         )
 
+        if self._vfh_speed_factor <= 0.0:
+            return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
+
+        # ------------------------------------------------------
+        # Angle to collision-free VFH+ heading
+        # ------------------------------------------------------
+
         angle_to_la = math.atan2(
-            math.sin(angle_to_la),
-            math.cos(angle_to_la)
+            math.sin(steer_heading - vtheta),
+            math.cos(steer_heading - vtheta)
         )
 
         # ------------------------------------------------------
@@ -926,9 +1027,11 @@ class PathPlanner:
                                 MotorDirection.REV, MotorDirection.FWD)
 
         # Small heading error: drive forward with proportional differential correction
-        corr = int(max(-0.5, min(0.5, angle_to_la * 1.1)) * base)
-        pwm_left = max(PWM_DEADBAND + 30, min(255, base + corr))
-        pwm_right = max(PWM_DEADBAND + 30, min(255, base - corr))
+        vfh_factor = getattr(self, "_vfh_speed_factor", 1.0)
+        effective_base = max(PWM_DEADBAND + 30, int(base * vfh_factor))
+        corr = int(max(-0.5, min(0.5, angle_to_la * 1.1)) * effective_base)
+        pwm_left = max(PWM_DEADBAND + 30, min(255, effective_base + corr))
+        pwm_right = max(PWM_DEADBAND + 30, min(255, effective_base - corr))
         if angle_to_la > 0:
             pwm_left = min(255, int(pwm_left * 1.15))
 

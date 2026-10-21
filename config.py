@@ -8,6 +8,7 @@ No other module defines magic numbers — they import from config.
 from __future__ import annotations
 
 import enum
+import os
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
@@ -406,9 +407,10 @@ JUNCTION_RECHECK_TIME_S: float = 2.0
 REPLAN_DEVIATION_PX: int = 40
 
 # ════════════════════════════════════════════════
-# AI OBSTACLE DETECTION (YOLOv8-Nano)
+# AI OBSTACLE DETECTION (YOLO11-Nano / YOLOv8-Nano)
 # ════════════════════════════════════════════════
-YOLO_MODEL_PATH: str = "assets/yolov8n.onnx"
+# Prefers YOLO11-Nano (yolo11n.onnx) when present; cleanly falls back to yolov8n.onnx
+YOLO_MODEL_PATH: str = "assets/yolo11n.onnx" if os.path.exists(os.path.join(os.path.dirname(__file__), "assets", "yolo11n.onnx")) else "assets/yolov8n.onnx"
 # ── FIX (MT3608 review): this was 160. The shipped assets/yolov8n.onnx is
 #    exported with a FIXED input shape of [1, 3, 320, 320], so a 160x160 blob
 #    made cv2.dnn forward() throw a Reshape assertion on the very first
