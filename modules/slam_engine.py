@@ -315,10 +315,6 @@ class SLAMEngine:
             self._frontier_goal is None
             or self._frontier_idx >= len(self._frontier_path)
         )
-        if not need_plan and self.frame_count % 30 == 0:
-            fgx, fgy = self._frontier_goal
-            if not self._is_frontier(fgx, fgy):
-                need_plan = True
 
         if need_plan:
             goal, path = self._select_frontier_goal(gx, gy, free_fn)
@@ -365,19 +361,21 @@ class SLAMEngine:
         wx, wy = self._frontier_path[la_idx]
         tx, ty = wx * res + res // 2, wy * res + res // 2
 
-        # ── proportional heading control with pivot hysteresis ───────────
+        # ── proportional heading control with wide hysteresis to prevent hunting ──
         desired = math.atan2(ty - robot_y, tx - robot_x)
         err = math.atan2(math.sin(desired - robot_theta),
                          math.cos(desired - robot_theta))
 
-        if abs(err) > 0.75:
+        # Enter in-place pivot only when target is > 72 deg (1.25 rad) away.
+        # Exit pivot and engage forward curved drive as soon as within 40 deg (0.70 rad).
+        if abs(err) > 1.25:
             self._pivoting = True
-        elif abs(err) < 0.35:
+        elif abs(err) < 0.70:
             self._pivoting = False
 
         if self._pivoting:
             err_mag = abs(err)
-            turn_pwm = int(max(165, min(205, 155 + err_mag * 45)))
+            turn_pwm = int(max(165, min(185, 155 + err_mag * 15)))
             if err > 0:
                 # Target is to the right (clockwise): left wheel FWD, right wheel REV
                 return MotorCommand(turn_pwm, turn_pwm,
@@ -387,10 +385,10 @@ class SLAMEngine:
                                 MotorDirection.REV, MotorDirection.FWD)
 
 
-        # Aligned -> drive forward with symmetric differential steering
-        corr = int(max(-0.45, min(0.45, err * 0.95)) * base_pwm)
-        left = max(PWM_DEADBAND + 35, min(255, base_pwm + corr))
-        right = max(PWM_DEADBAND + 35, min(255, base_pwm - corr))
+        # Aligned -> drive forward with smooth differential steering
+        corr = int(max(-0.30, min(0.30, err * 0.70)) * base_pwm)
+        left = max(130, min(255, base_pwm + corr))
+        right = max(130, min(255, base_pwm - corr))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)
 
