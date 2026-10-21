@@ -976,13 +976,15 @@ class PathPlanner:
         # ======================================================
 
         # Large heading error: pivot in place towards the waypoint with hysteresis
-        if abs(angle_to_la) > 0.45:
+        if abs(angle_to_la) > 0.75:
             self._pivoting = True
-        elif abs(angle_to_la) < 0.20:
+        elif abs(angle_to_la) < 0.35:
             self._pivoting = False
 
         if self._pivoting:
-            turn_pwm = 175
+            err_mag = abs(angle_to_la)
+            # Proportional pivot deceleration so robot settles cleanly without overshoot
+            turn_pwm = int(max(PWM_DEADBAND + 55, min(165, 80 + err_mag * 65)))
             if angle_to_la > 0:
                 # Target is to the right (desired > theta): pivot right
                 return MotorCommand(turn_pwm, turn_pwm,
@@ -990,6 +992,7 @@ class PathPlanner:
             # Target is to the left (desired < theta): pivot left
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
+
 
         # Small heading error: drive forward with proportional differential correction
         vfh_factor = getattr(self, "_vfh_speed_factor", 1.0)

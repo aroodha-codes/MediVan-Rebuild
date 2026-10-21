@@ -370,13 +370,14 @@ class SLAMEngine:
         err = math.atan2(math.sin(desired - robot_theta),
                          math.cos(desired - robot_theta))
 
-        if abs(err) > 0.60:
+        if abs(err) > 0.75:
             self._pivoting = True
-        elif abs(err) < 0.25:
+        elif abs(err) < 0.35:
             self._pivoting = False
 
         if self._pivoting:
-            turn_pwm = 175
+            err_mag = abs(err)
+            turn_pwm = int(max(PWM_DEADBAND + 55, min(165, 80 + err_mag * 65)))
             if err > 0:
                 # Target is to the right (clockwise): left wheel FWD, right wheel REV
                 return MotorCommand(turn_pwm, turn_pwm,
@@ -384,6 +385,7 @@ class SLAMEngine:
             # Target is to the left (counter-clockwise): left wheel REV, right wheel FWD
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
+
 
         # Aligned -> drive forward with symmetric differential steering
         corr = int(max(-0.45, min(0.45, err * 0.95)) * base_pwm)
