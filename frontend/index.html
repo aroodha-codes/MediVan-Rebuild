@@ -108,6 +108,21 @@
         </article>
       </div>
 
+      <article class="card card--flush" style="margin-top: 14px;">
+        <div class="card__bar" style="padding: 12px 18px 8px;">
+          <h2 class="card__title" style="margin: 0;">Live Motion &amp; Floor Tracker</h2>
+          <span class="tag" id="overviewMotionBadge" style="background:#4A5866; color:#fff;">Robot Stationary</span>
+        </div>
+        <div class="mapwrap" style="padding: 10px; min-height: 240px; max-height: 380px; overflow: hidden;">
+          <canvas id="overviewMapCanvas" width="800" height="600" style="max-height: 360px;"></canvas>
+        </div>
+        <div class="maptools" style="padding: 8px 16px;">
+          <span class="mono" id="overviewPose">x 400  y 300  θ 0°</span>
+          <span class="maptools__spacer"></span>
+          <a href="#/map" class="btn btn--primary" style="padding: 4px 10px; font-size: 12px; text-decoration: none;">Open Full Map &rarr;</a>
+        </div>
+      </article>
+
       <article class="card">
         <h2 class="card__title">Activity</h2>
         <ol class="feed" id="feed"><li class="feed__empty">No events yet.</li></ol>

@@ -1865,7 +1865,10 @@ def main() -> None:
             # Publish a low-cost, JSON-safe snapshot at 6 Hz (loop runs at target FPS).
             if dashboard_bridge is not None and frame_count % 5 == 0:
                 try:
-                    dashboard_trail.append([round(float(motor.x), 2), round(float(motor.y), 2)])
+                    _mx = round(float(motor.x), 2)
+                    _my = round(float(motor.y), 2)
+                    if not dashboard_trail or math.hypot(_mx - dashboard_trail[-1][0], _my - dashboard_trail[-1][1]) >= 0.8:
+                        dashboard_trail.append([_mx, _my])
                     _mission_snap = dashboard_control_state.mission_snapshot()
                     _active = _mission_snap.get("active")
                     _pending_count = len(_mission_snap.get("queue", [])) + (1 if _active else 0)

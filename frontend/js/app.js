@@ -20,7 +20,10 @@
     state.page = page;
     $$('.page').forEach(p => p.classList.toggle('is-active', p.dataset.page === page));
     $$('.rail__item').forEach(a => a.classList.toggle('is-active', a.dataset.page === page));
-    if (page === 'map') refreshMap();
+    if (page === 'map' || page === 'dashboard') {
+      if (!state.map) refreshMap();
+      else drawMap();
+    }
     if (page === 'camera') refreshCamera();
     if (page === 'analytics') refreshAnalytics();
     if (page === 'missions') refreshMissions();
@@ -114,8 +117,8 @@
     $('#sPending').textContent   = s.deliveries_pending
       ? `${s.deliveries_pending} waiting` : 'Queue empty';
 
-    $('#sPos').textContent     = `${fmt(s.x, 0)}, ${fmt(s.y, 0)} px`;
-    $('#sHeading').textContent = fmt(s.heading_deg, 0) + '°';
+    $('#sPos').textContent     = `${fmt(s.x, 1)}, ${fmt(s.y, 1)} px`;
+    $('#sHeading').textContent = fmt(s.heading_deg, 1) + '°';
     $('#sVel').textContent     = fmt(s.speed_ms, 2) + ' m/s';
     $('#sConf').textContent    = fmt(s.localization_confidence * 100, 0) + '%';
     $('#sDrift').textContent   = fmt(s.drift_px, 1) + ' px';
@@ -125,6 +128,45 @@
     $('#sRam').textContent    = fmt(s.ram_mb, 0) + ' MB';
     $('#sPlan').textContent   = fmt(s.planner_ms, 1) + ' ms';
     $('#sUptime').textContent = formatUptime(s.uptime_s);
+
+    // Live robot pose & motion synchronisation for canvas rendering
+    if (s.x != null && s.y != null) {
+      const thetaRad = ((Number(s.heading_deg) || 0) * Math.PI) / 180;
+      if (!state.map) {
+        state.map = {
+          width: 80, height: 60, cell: 10,
+          cells: new Array(4800).fill(0),
+          pose: { x: Number(s.x), y: Number(s.y), theta: thetaRad },
+          trail: [[Number(s.x), Number(s.y)]],
+        };
+      } else {
+        state.map.pose = { x: Number(s.x), y: Number(s.y), theta: thetaRad };
+        if (!state.map.trail) state.map.trail = [];
+        const last = state.map.trail[state.map.trail.length - 1];
+        if (!last || Math.hypot(last[0] - Number(s.x), last[1] - Number(s.y)) >= 0.8) {
+          state.map.trail.push([Number(s.x), Number(s.y)]);
+          if (state.map.trail.length > 800) state.map.trail.shift();
+        }
+      }
+      drawMap();
+    }
+
+    const motionBadge = $('#overviewMotionBadge');
+    if (motionBadge) {
+      const speed = Number(s.speed_ms || 0);
+      const ctrl = s.control || {};
+      const drive = String(ctrl.effective_drive || ctrl.drive || '').toLowerCase();
+      if (drive && drive !== 'stop' && !drive.includes('stop')) {
+        motionBadge.textContent = `Moving: ${drive.toUpperCase()} (${speed.toFixed(2)} m/s)`;
+        motionBadge.style.background = '#2e7d32';
+      } else if (speed > 0.02) {
+        motionBadge.textContent = `Moving (${speed.toFixed(2)} m/s)`;
+        motionBadge.style.background = '#2e7d32';
+      } else {
+        motionBadge.textContent = 'Robot Stationary';
+        motionBadge.style.background = '#4A5866';
+      }
+    }
 
     const control = s.control || {};
     const manualStatus = $('#manualDriveStatus');
@@ -190,68 +232,143 @@
     drawMap();
   }
   function drawMap() {
-    const m = state.map; const cv = $('#mapCanvas');
-    if (!m || !cv) return;
-    const ctx = cv.getContext('2d');
-    const cell = m.cell;
-    cv.width = m.width * cell; cv.height = m.height * cell;
+    const m = state.map;
+    if (!m) return;
+    const canvases = [$('#mapCanvas'), $('#overviewMapCanvas')].filter(Boolean);
+    if (!canvases.length) return;
 
-    ctx.fillStyle = '#1B2733'; ctx.fillRect(0, 0, cv.width, cv.height);
-    for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) {
-      const v = m.cells[y * m.width + x];
-      if (v === 0) continue;
-      ctx.fillStyle = v < 0 ? '#63798F' : '#D8E2EC';
-      ctx.fillRect(x * cell, y * cell, cell, cell);
-    }
-    if ($('#tgFrontier').checked && m.frontiers) {
-      ctx.fillStyle = 'rgba(232,163,61,.55)';
-      m.frontiers.forEach(([x, y]) => ctx.fillRect(x * cell, y * cell, cell, cell));
-    }
-    if ($('#tgTrail').checked && m.trail && m.trail.length > 1) {
-      ctx.strokeStyle = 'rgba(63,163,77,.4)'; ctx.lineWidth = 2; ctx.beginPath();
-      m.trail.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
-    }
-    if ($('#tgPath').checked && m.path && m.path.length > 1) {
-      ctx.strokeStyle = '#E8A33D'; ctx.lineWidth = 3; ctx.setLineDash([9, 6]); ctx.beginPath();
-      m.path.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
-      ctx.stroke(); ctx.setLineDash([]);
-    }
-    if (m.dock) {
-      ctx.fillStyle = '#0E7C86';
-      ctx.fillRect(m.dock[0] - 9, m.dock[1] - 9, 18, 18);
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
-      ctx.fillText('D', m.dock[0], m.dock[1] + 4);
-    }
-    if (m.goal) {
-      ctx.strokeStyle = '#E8A33D'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(m.goal[0], m.goal[1], 11, 0, Math.PI * 2); ctx.stroke();
-    }
-    if (state.selectedTarget) {
-      ctx.strokeStyle = '#F0C24B'; ctx.fillStyle = '#F0C24B'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(state.selectedTarget[0], state.selectedTarget[1], 10, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(state.selectedTarget[0] - 14, state.selectedTarget[1]);
-      ctx.lineTo(state.selectedTarget[0] + 14, state.selectedTarget[1]);
-      ctx.moveTo(state.selectedTarget[0], state.selectedTarget[1] - 14);
-      ctx.lineTo(state.selectedTarget[0], state.selectedTarget[1] + 14); ctx.stroke();
-    }
+    canvases.forEach(cv => {
+      // If the canvas element is not visible on page, skip drawing to save CPU
+      if (cv.offsetParent === null && canvases.length > 1) return;
+      const ctx = cv.getContext('2d');
+      const cell = m.cell || 10;
+      if (cv.width !== m.width * cell || cv.height !== m.height * cell) {
+        cv.width = m.width * cell;
+        cv.height = m.height * cell;
+      }
+
+      ctx.fillStyle = '#1B2733';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      if (m.cells) {
+        for (let y = 0; y < m.height; y++) {
+          for (let x = 0; x < m.width; x++) {
+            const v = m.cells[y * m.width + x];
+            if (v === 0) continue;
+            ctx.fillStyle = v < 0 ? '#63798F' : '#D8E2EC';
+            ctx.fillRect(x * cell, y * cell, cell, cell);
+          }
+        }
+      }
+
+      const tgFrontier = $('#tgFrontier');
+      if (tgFrontier && tgFrontier.checked && m.frontiers) {
+        ctx.fillStyle = 'rgba(232,163,61,.55)';
+        m.frontiers.forEach(([x, y]) => ctx.fillRect(x * cell, y * cell, cell, cell));
+      }
+
+      const tgTrail = $('#tgTrail');
+      const showTrail = tgTrail ? tgTrail.checked : true;
+      if (showTrail && m.trail && m.trail.length > 1) {
+        ctx.strokeStyle = 'rgba(63,163,77,.65)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        m.trail.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.stroke();
+      }
+
+      const tgPath = $('#tgPath');
+      const showPath = tgPath ? tgPath.checked : true;
+      if (showPath && m.path && m.path.length > 1) {
+        ctx.strokeStyle = '#E8A33D';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([9, 6]);
+        ctx.beginPath();
+        m.path.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (m.dock) {
+        ctx.fillStyle = '#0E7C86';
+        ctx.fillRect(m.dock[0] - 9, m.dock[1] - 9, 18, 18);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('D', m.dock[0], m.dock[1] + 4);
+      }
+
+      if (m.goal) {
+        ctx.strokeStyle = '#E8A33D';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(m.goal[0], m.goal[1], 11, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      if (state.selectedTarget) {
+        ctx.strokeStyle = '#F0C24B';
+        ctx.fillStyle = '#F0C24B';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(state.selectedTarget[0], state.selectedTarget[1], 10, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(state.selectedTarget[0] - 14, state.selectedTarget[1]);
+        ctx.lineTo(state.selectedTarget[0] + 14, state.selectedTarget[1]);
+        ctx.moveTo(state.selectedTarget[0], state.selectedTarget[1] - 14);
+        ctx.lineTo(state.selectedTarget[0], state.selectedTarget[1] + 14);
+        ctx.stroke();
+      }
+
+      const p = m.pose;
+      if (p) {
+        // High visibility outer aura ring
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(63,163,77,.6)';
+        ctx.lineWidth = 2;
+        ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Directional robot vehicle body
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.theta);
+        ctx.fillStyle = '#3FA34D';
+        ctx.beginPath();
+        ctx.moveTo(15, 0);
+        ctx.lineTo(-9, 9);
+        ctx.lineTo(-5, 0);
+        ctx.lineTo(-9, -9);
+        ctx.closePath();
+        ctx.fill();
+
+        // Robot center beacon dot
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    });
+
     const targetStatus = $('#mapTargetStatus');
-    if (targetStatus) targetStatus.textContent = state.selectedTarget
-      ? `Selected target x=${Math.round(state.selectedTarget[0])} y=${Math.round(state.selectedTarget[1])}`
-      : (API.source === 'http' ? 'Click explored map to set delivery target' : 'No delivery target selected');
+    if (targetStatus) {
+      targetStatus.textContent = state.selectedTarget
+        ? `Selected target x=${Math.round(state.selectedTarget[0])} y=${Math.round(state.selectedTarget[1])}`
+        : (API.source === 'http' ? 'Click explored map to set delivery target' : 'No delivery target selected');
+    }
     const dispatchBtn = $('#btnDispatchTarget');
     if (dispatchBtn) {
       dispatchBtn.style.display = (state.selectedTarget && API.source === 'http') ? 'inline-block' : 'none';
     }
-    const p = m.pose;
-    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.theta);
-    ctx.fillStyle = '#3FA34D';
-    ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-8, 8); ctx.lineTo(-8, -8); ctx.closePath(); ctx.fill();
-    ctx.restore();
-    ctx.beginPath(); ctx.strokeStyle = 'rgba(63,163,77,.35)'; ctx.lineWidth = 1.5;
-    ctx.arc(p.x, p.y, 17, 0, Math.PI * 2); ctx.stroke();
 
-    $('#mapPose').textContent =
-      `x ${p.x.toFixed(0)}  y ${p.y.toFixed(0)}  θ ${(p.theta * 180 / Math.PI).toFixed(0)}°`;
+    if (m.pose) {
+      const poseStr = `x ${m.pose.x.toFixed(1)}  y ${m.pose.y.toFixed(1)}  θ ${(m.pose.theta * 180 / Math.PI).toFixed(0)}°`;
+      const mapPoseEl = $('#mapPose');
+      if (mapPoseEl) mapPoseEl.textContent = poseStr;
+      const overviewPoseEl = $('#overviewPose');
+      if (overviewPoseEl) overviewPoseEl.textContent = poseStr;
+    }
   }
 
   /* ═════════ CAMERA ═════════ */
@@ -603,7 +720,7 @@
     API.stream
       .on('status', s => {
         applyStatus(s);
-        if (state.page === 'map') refreshMap();
+        if (state.page === 'map' && !state.map) refreshMap();
       })
       .on('events', renderFeed)
       .on('alert', e => toast(e.kind, e.title, e.detail))
@@ -611,10 +728,11 @@
         $('#linkState').classList.add('is-down');
         $('#linkState').childNodes[0].nodeValue = 'NO LINK';
       })
-      .start(700);
+      .start(400);
 
     refreshMissions();
     setInterval(() => {
+      if (state.page === 'dashboard' || state.page === 'map') refreshMap();
       if (state.page === 'camera') refreshCamera();
       if (state.page === 'analytics') refreshAnalytics();
       if (state.page === 'missions') refreshMissions();
