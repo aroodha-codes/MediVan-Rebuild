@@ -703,7 +703,6 @@ def main() -> None:
                     elif _dash_name == "manual":
                         # Manual mode is a deliberate, zero-velocity arm. It must not
                         # require starting autonomous exploration first.
-                        dashboard_control_state.set_drive("stop")
                         if dashboard_control_state.snapshot().get("estop_latched"):
                             raise RuntimeError("E-stop is latched; acknowledge it first.")
                         if hasattr(motor, "release_emergency"):
@@ -1454,12 +1453,9 @@ def main() -> None:
                         return CellType.WALL
 
                 # Manual mode override
-
-                manual_cmd = motor.handle_keyboard(keys)
-
-                if manual_cmd is not None:
-
-                    motor_cmd = manual_cmd
+                if motor.mode == DriveMode.MANUAL:
+                    manual_cmd = motor.handle_keyboard(keys)
+                    motor_cmd = manual_cmd if manual_cmd is not None else MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
 
                 elif sim_mode == SimMode.MAPPING and slam is not None:
                     if HARDWARE_MODE and not dashboard_armed:

@@ -124,7 +124,8 @@ class DashboardBridge:
                     mime += "; charset=utf-8"
                 self.send_response(200)
                 self.send_header("Content-Type", mime)
-                self.send_header("Cache-Control", "no-cache" if path.name in ("index.html", "app.js", "api.js") else "public, max-age=3600")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0" if path.name in ("index.html", "app.js", "api.js", "styles.css") else "public, max-age=3600")
+                self.send_header("Pragma", "no-cache")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()

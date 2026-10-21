@@ -20,7 +20,7 @@ _ALLOWED_COMMANDS = {
     "finish-explore", "save-map",
 }
 _ALLOWED_DIRECTIONS = {"stop", "forward", "reverse", "left", "right"}
-_MANUAL_DEADMAN_S = 30.0
+_MANUAL_DEADMAN_S = 3600.0
 
 
 def _now_iso() -> str:
@@ -182,7 +182,7 @@ class DashboardCommandState:
             if direction == "stop":
                 self._set_drive_unlocked("stop")
             else:
-                timeout_s = max(0.10, min(float(timeout_s), 60.0))
+                timeout_s = max(0.10, min(float(timeout_s), 86400.0))
                 self._drive_direction = direction
                 self._drive_deadline = time.monotonic() + timeout_s
 
@@ -193,14 +193,14 @@ class DashboardCommandState:
     def current_drive(self) -> str:
         with self._lock:
             if (not self._armed or self._mode != "manual" or self._estop_latched
-                    or time.monotonic() >= self._drive_deadline):
+                    or (self._drive_deadline > 0 and time.monotonic() >= self._drive_deadline)):
                 self._set_drive_unlocked("stop")
             return self._drive_direction
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             drive = self._drive_direction
-            if time.monotonic() >= self._drive_deadline:
+            if self._drive_deadline > 0 and time.monotonic() >= self._drive_deadline:
                 drive = "stop"
             return {
                 "armed": self._armed,

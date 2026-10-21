@@ -562,26 +562,20 @@
       }
     });
 
-    // Press-and-hold joystick: refresh every 200 ms; server stops after 1.5 s
-    // without a refresh, so a lost browser/network release does not keep driving.
+    // Continuous latching manual driving:
+    // User clicks a direction (or presses W/A/S/D/Arrows) and the robot drives
+    // continuously until the user clicks STOP, presses Space, or triggers E-stop.
     let dashboardDriveTimer = null;
     let dashboardDriveDirection = null;
     let dashboardDriveInFlight = false;
-    let dashboardDriveFailures = 0;
     async function sendDashboardDrive(direction) {
       if (!dashboardDriveDirection && direction !== 'stop') return;
-      if (dashboardDriveInFlight) return; // avoid piling up redundant HTTP requests
+      if (dashboardDriveInFlight) return;
       dashboardDriveInFlight = true;
       try {
         await API.robot.drive(direction);
-        dashboardDriveFailures = 0;
       } catch (err) {
-        dashboardDriveFailures++;
-        if (dashboardDriveFailures >= 8) {
-          dashboardDriveDirection = null;
-          if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
-          toast('bad', 'Manual drive stopped', err.message || String(err));
-        }
+        console.warn('[Manual Drive] Heartbeat note:', err.message || String(err));
       } finally {
         dashboardDriveInFlight = false;
       }
@@ -590,7 +584,6 @@
       const wasDriving = !!dashboardDriveDirection;
       dashboardDriveDirection = null;
       dashboardDriveInFlight = false;
-      dashboardDriveFailures = 0;
       if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
       if (wasDriving && API.source === 'http') sendDashboardDrive('stop');
     }
@@ -599,7 +592,7 @@
         $('#manualMode').checked = true;
         try {
           await API.robot.command('manual');
-          toast('info', 'Manual driving enabled', 'Drive with held buttons or W/A/S/D / Arrow keys.');
+          toast('info', 'Manual driving enabled', 'Click a direction to drive continuously; click STOP to halt.');
         } catch (err) {
           $('#manualMode').checked = false;
           throw err;
@@ -607,31 +600,34 @@
       }
     }
 
+    async function setManualDriveDirection(dir) {
+      if (API.source !== 'http') {
+        toast('warn', 'Manual drive unavailable', 'Dashboard is not connected to a live robot.');
+        return;
+      }
+      try {
+        await ensureManualMode();
+      } catch (err) {
+        toast('bad', 'Manual mode failed', err.message || String(err));
+        return;
+      }
+      if (dir === 'stop') {
+        stopDashboardDrive();
+        return;
+      }
+      if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
+      dashboardDriveDirection = dir;
+      sendDashboardDrive(dashboardDriveDirection);
+      dashboardDriveTimer = setInterval(() => {
+        if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
+      }, 3000);
+    }
+
     $$('[data-drive]').forEach(btn => {
       btn.addEventListener('contextmenu', e => e.preventDefault());
       btn.addEventListener('click', async e => {
-        if (API.source !== 'http') {
-          e.preventDefault();
-          toast('warn', 'Manual drive unavailable', 'Dashboard is not connected to a live robot.');
-          return;
-        }
-        try {
-          await ensureManualMode();
-        } catch (err) {
-          toast('bad', 'Manual mode failed', err.message || String(err));
-          return;
-        }
-        const dir = btn.dataset.drive;
-        if (dir === 'stop') {
-          stopDashboardDrive();
-          return;
-        }
-        if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
-        dashboardDriveDirection = dir;
-        sendDashboardDrive(dashboardDriveDirection);
-        dashboardDriveTimer = setInterval(() => {
-          if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-        }, 250);
+        e.preventDefault();
+        await setManualDriveDirection(btn.dataset.drive);
       });
     });
 
@@ -648,22 +644,8 @@
       const dir = KEY_DIR_MAP[e.code];
       if (!dir) return;
       e.preventDefault();
-      try {
-        await ensureManualMode();
-      } catch (_) {
-        return;
-      }
-      if (dir === 'stop') {
-        stopDashboardDrive();
-        return;
-      }
       if (dashboardDriveDirection === dir) return;
-      if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
-      dashboardDriveDirection = dir;
-      sendDashboardDrive(dashboardDriveDirection);
-      dashboardDriveTimer = setInterval(() => {
-        if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-      }, 250);
+      await setManualDriveDirection(dir);
     });
 
     $$('#tgPath,#tgFrontier,#tgTrail').forEach(t => t.addEventListener('change', drawMap));
