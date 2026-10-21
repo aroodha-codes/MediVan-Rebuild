@@ -170,3 +170,46 @@ def test_3x3_delivery_3_arrives_and_brakes():
     assert cmd.dir_a == MotorDirection.BRAKE
     assert cmd.dir_b == MotorDirection.BRAKE
     assert planner.path_complete is True
+
+
+def test_3x3_delivery_4_does_not_prematurely_complete_in_transit():
+    """Test 4: Planner must NOT claim completion while vehicle is still in transit."""
+    planner = PathPlanner()
+    planner.path = [(400, 300), (430, 300), (470, 300), (500, 300)]
+    
+    # Vehicle at start (400, 300) - 100px from goal
+    state_start = VehicleState(x=400.0, y=300.0, theta=0.0)
+    planner.follow_path(state_start)
+    assert planner.path_complete is False
+    
+    # Vehicle mid-way at (440, 300) - 60px from goal
+    state_mid = VehicleState(x=440.0, y=300.0, theta=0.0)
+    planner.follow_path(state_mid)
+    assert planner.path_complete is False
+    
+    # Vehicle still 25px away (> LOOKAHEAD_DIST_PX of 20)
+    state_near = VehicleState(x=475.0, y=300.0, theta=0.0)
+    planner.follow_path(state_near)
+    assert planner.path_complete is False
+    
+    # Vehicle reaches within 20px (e.g. at 485, dist=15)
+    state_goal = VehicleState(x=485.0, y=300.0, theta=0.0)
+    cmd_done = planner.follow_path(state_goal)
+    assert cmd_done.dir_a == MotorDirection.BRAKE
+    assert cmd_done.dir_b == MotorDirection.BRAKE
+    assert planner.path_complete is True
+
+
+def test_3x3_delivery_5_symmetric_pwm_175_steering():
+    """Test 5: Delivery forward drive applies symmetric PWM 175 base."""
+    planner = PathPlanner()
+    planner.path = [(400, 300), (450, 300)]
+    state_straight = VehicleState(x=400.0, y=300.0, theta=0.0)
+    cmd = planner.follow_path(state_straight)
+    
+    assert cmd.dir_a == MotorDirection.FWD
+    assert cmd.dir_b == MotorDirection.FWD
+    assert cmd.pwm_a >= 175 and cmd.pwm_b >= 175
+    # When perfectly aligned, left and right PWM are identical (symmetric)
+    assert abs(cmd.pwm_a - cmd.pwm_b) <= 5
+

@@ -47,7 +47,7 @@ def planner_callbacks(slam):
 
     def grid(x: int, y: int):
         from config import CellType
-        return CellType.FREE if safe(x, y) else CellType.WALL
+        return CellType.FREE if free(x, y) else CellType.WALL
 
     return cost, safe, near_wall, grid
 
@@ -78,12 +78,15 @@ def select_reachable_destination(slam, start_x: float, start_y: float,
         return True
 
     if not traversable(sx, sy):
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1)):
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (2, 0), (-2, 0), (0, 2), (0, -2)):
             if traversable(sx + dx, sy + dy):
                 sx, sy = sx + dx, sy + dy
                 break
         else:
-            return None
+            if free(int(start_x), int(start_y)):
+                sx, sy = int(start_x) // res, int(start_y) // res
+            else:
+                return None
 
     dist = {(sx, sy): 0}
     queue = deque([(sx, sy)])
@@ -101,6 +104,8 @@ def select_reachable_destination(slam, start_x: float, start_y: float,
                   if d * res >= min_distance_px]
     if not candidates:
         candidates = [(d, cell) for cell, d in dist.items() if d * res >= 15]
+    if not candidates:
+        candidates = [(d, cell) for cell, d in dist.items() if d > 0]
     if not candidates:
         return None
     _, (gx, gy) = max(candidates, key=lambda item: item[0])

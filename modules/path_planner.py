@@ -91,6 +91,11 @@ class PathPlanner:
         self._junction_action: Optional[JunctionAction] = None
         self._junction_reroute_requested: bool = False
 
+        # Destination arrival tracking
+        self._arrived: bool = False
+        self._last_vx: Optional[float] = None
+        self._last_vy: Optional[float] = None
+
     # ==========================================================
     # A* SEARCH
     # ==========================================================
@@ -266,6 +271,7 @@ class PathPlanner:
         ]
 
         self.path_index = 0
+        self._arrived = False
 
         self.replan_count += 1
 
@@ -611,12 +617,12 @@ class PathPlanner:
 
         # 2. Check if the target heading is unobstructed
         target_sec = int(round((target_heading + math.pi) / sector_size)) % num_sectors
-        threshold = 0.25
+        threshold = 0.85
 
         target_blocked = any(pod[(target_sec + offset) % num_sectors] > threshold for offset in (-1, 0, 1))
 
         if not target_blocked:
-            speed_factor = 1.0 if pod[target_sec] < 0.10 else 0.85
+            speed_factor = 1.0 if pod[target_sec] < 0.25 else 0.85
             return target_heading, speed_factor
 
         # 3. Path is obstructed: Find free valleys in forward semicircle
@@ -629,6 +635,9 @@ class PathPlanner:
                     valleys.append((sec, sec_heading))
 
         if not valleys:
+            # If all forward sectors are dense, check if target direction is still relatively clear
+            if pod[target_sec] < threshold * 1.5:
+                return target_heading, 0.45
             return target_heading, 0.0
 
         # 4. Choose valley with minimum deviation from target heading and current orientation
@@ -639,7 +648,7 @@ class PathPlanner:
             return target_err + 0.35 * steer_effort
 
         best_sec, best_heading = min(valleys, key=valley_cost)
-        return best_heading, 0.65
+        return best_heading, 0.70
 
     # ==========================================================
     # PURE PURSUIT PATH FOLLOWING WITH VFH+ LOCAL OBSTACLE SHIELD
@@ -672,6 +681,8 @@ class PathPlanner:
         vx = vehicle_state.x
         vy = vehicle_state.y
         vtheta = vehicle_state.theta
+        self._last_vx = vx
+        self._last_vy = vy
 
         # ------------------------------------------------------
         # Advance path index
@@ -1007,8 +1018,11 @@ class PathPlanner:
         # Check for destination arrival
         if self.path_index >= len(self.path) - 1:
             dest_x, dest_y = self.path[-1]
-            if math.hypot(vx - dest_x, vy - dest_y) < LOOKAHEAD_DIST_PX:
+            if math.hypot(vx - dest_x, vy - dest_y) <= LOOKAHEAD_DIST_PX:
+                self._arrived = True
                 return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
+            else:
+                self._arrived = False
 
         # ======================================================
         # FINAL MOTOR PWM (Pivot vs Forward differential drive)
@@ -1016,23 +1030,22 @@ class PathPlanner:
 
         # Large heading error: pivot in place towards the waypoint
         if abs(angle_to_la) > 0.45:
-            turn_pwm = min(175, max(120, int(base * 1.25)))
+            turn_pwm = 175
             if angle_to_la > 0:
-                # Target is to the right (desired > theta): pivot right with boosted rotation torque
+                # Target is to the right (desired > theta): pivot right
                 return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
-            # Target is to the left (desired < theta): pivot left (same 175 PWM to left)
+            # Target is to the left (desired < theta): pivot left
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 
         # Small heading error: drive forward with proportional differential correction
         vfh_factor = getattr(self, "_vfh_speed_factor", 1.0)
+        base = max(175, BASE_PWM)
         effective_base = max(PWM_DEADBAND + 30, int(base * vfh_factor))
-        corr = int(max(-0.5, min(0.5, angle_to_la * 1.1)) * effective_base)
+        corr = int(max(-0.4, min(0.4, angle_to_la * 0.9)) * effective_base)
         pwm_left = max(PWM_DEADBAND + 30, min(255, effective_base + corr))
         pwm_right = max(PWM_DEADBAND + 30, min(255, effective_base - corr))
-        if angle_to_la > 0:
-            pwm_left = min(255, int(pwm_left * 1.15))
 
         return MotorCommand(
             int(pwm_left),
@@ -1080,12 +1093,14 @@ class PathPlanner:
 
     @property
     def path_complete(self) -> bool:
-
-        return (
-            len(self.path) > 0
-            and self.path_index
-            >= len(self.path) - 1
-        )
+        if self._arrived:
+            return True
+        if len(self.path) > 0 and self.path_index >= len(self.path) - 1:
+            dest_x, dest_y = self.path[-1]
+            if self._last_vx is not None and self._last_vy is not None:
+                if math.hypot(self._last_vx - dest_x, self._last_vy - dest_y) <= LOOKAHEAD_DIST_PX:
+                    return True
+        return False
 
     # ==========================================================
     # REMAINING WAYPOINTS

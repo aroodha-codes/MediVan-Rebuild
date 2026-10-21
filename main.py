@@ -557,6 +557,7 @@ def main() -> None:
     physical_mission_phase = "EXPLORE" if HARDWARE_MODE else None
     physical_mission_start = tuple(start_pos)
     physical_mission_goal = None
+    arrival_dwell_ticks = 0
 
 
 
@@ -720,15 +721,68 @@ def main() -> None:
                             motor.release_emergency()
                         dashboard_armed = True
                         motor.mode = DriveMode.AUTONOMOUS
-                        # Reuse a completed live map. If a user-selected target was provided,
-                        # mark mapping complete so navigation starts immediately.
-                        if HARDWARE_MODE and (slam is None or not getattr(slam, "mapping_complete", False)):
-                            if dashboard_mission_target is not None and slam is not None:
-                                slam.mapping_complete = True
-                            physical_mission_phase = "EXPLORE"
-                            sim_mode = SimMode.MAPPING
+                        # Reuse a completed live map or dispatch immediately using the current SLAM map.
+                        if HARDWARE_MODE and slam is not None:
+                            slam.mapping_complete = True
+                            candidate = None
+                            if dashboard_mission_target is not None:
+                                cand_pt = (int(dashboard_mission_target[0]), int(dashboard_mission_target[1]))
+                                _cost_fn, _free_fn, _near_wall_fn, _grid_fn = planner_callbacks(slam)
+                                if _free_fn(*cand_pt):
+                                    candidate = cand_pt
+                                else:
+                                    best_free = None
+                                    best_d = 999
+                                    res = SLAM_GRID_RESOLUTION
+                                    for dx in range(-45, 46, res):
+                                        for dy in range(-45, 46, res):
+                                            nx, ny = cand_pt[0] + dx, cand_pt[1] + dy
+                                            if _free_fn(nx, ny):
+                                                d = math.hypot(dx, dy)
+                                                if d < best_d:
+                                                    best_d = d
+                                                    best_free = (nx, ny)
+                                    candidate = best_free
+                            else:
+                                candidate = select_reachable_destination(slam, motor.x, motor.y)
+
+                            if candidate is not None and math.hypot(candidate[0] - motor.x, candidate[1] - motor.y) >= 10:
+                                physical_mission_goal = candidate
+                                goal = physical_mission_goal
+                                cost_fn, free_fn, near_wall_fn, _ = planner_callbacks(slam)
+                                planner.path = []
+                                path = planner.plan_path(
+                                    start=(int(motor.x), int(motor.y)), goal=goal,
+                                    get_cost_fn=cost_fn, is_free_fn=free_fn,
+                                    is_near_wall_fn=near_wall_fn,
+                                    map_width=MAP_WIDTH, map_height=MAP_HEIGHT,
+                                )
+                                if path:
+                                    physical_mission_phase = "DELIVER"
+                                    sim_mode = SimMode.NAVIGATION
+                                    arrival_dwell_ticks = 0
+                                    hud.set_alert(f"DELIVERY: {goal}", 3.0)
+                                    dashboard_control_state.add_event(
+                                        "info", "Delivery Dispatched",
+                                        f"Navigating to destination ({goal[0]}, {goal[1]})"
+                                    )
+                                    print(f"[dashboard-control] Delivery {dashboard_active_mission_id} dispatched to {goal}; {len(path)} waypoints")
+                                else:
+                                    _why = "No navigable path to selected destination."
+                                    print(f"[dashboard-control] Delivery {dashboard_active_mission_id} failed: {_why}")
+                                    dashboard_control_state.finish_mission(dashboard_active_mission_id, False, _why)
+                                    dashboard_active_mission_id = None
+                                    physical_mission_phase = "READY"
+                                    dashboard_armed = False
+                            else:
+                                _why = "Target is too close or not reachable in free space."
+                                print(f"[dashboard-control] Delivery {dashboard_active_mission_id} rejected: {_why}")
+                                dashboard_control_state.finish_mission(dashboard_active_mission_id, False, _why)
+                                dashboard_active_mission_id = None
+                                physical_mission_phase = "READY"
+                                dashboard_armed = False
                         elif HARDWARE_MODE:
-                            physical_mission_phase = "EXPLORE"  # completion handler plans the route on next SLAM update
+                            physical_mission_phase = "EXPLORE"
                             sim_mode = SimMode.MAPPING
                         print(f"[dashboard-control] Delivery {dashboard_active_mission_id} accepted; phase={physical_mission_phase}.")
 
@@ -1300,28 +1354,46 @@ def main() -> None:
                 if planner.check_deviation(vehicle_state):
                     needs_replan = True
 
-                if HARDWARE_MODE and physical_mission_phase in ("DELIVER", "RETURN"):
+                if HARDWARE_MODE and physical_mission_phase in ("DELIVER", "RETURN", "ARRIVED"):
                     # Physical planning uses observed SLAM free space only.
-                    if planner.path_complete:
-                        if physical_mission_phase == "DELIVER":
+                    if physical_mission_phase == "DELIVER" and planner.path_complete:
+                        physical_mission_phase = "ARRIVED"
+                        arrival_dwell_ticks = 60  # ~2.5 seconds dwell at target
+                        motor.emergency_stop()
+                        hud.set_alert("DELIVERY COMPLETE — ARRIVED AT TARGET", 4.0)
+                        _detail = f"Arrived at destination ({int(motor.x)}, {int(motor.y)}). Payload delivered successfully."
+                        dashboard_control_state.finish_mission(dashboard_active_mission_id, True, _detail)
+                        dashboard_active_mission_id = None
+                        dashboard_mission_target = None
+                        dashboard_control_state.add_event("success", "Delivery Completed", _detail)
+                        print(f"[main] DELIVERY COMPLETE: {_detail}")
+
+                    elif physical_mission_phase == "ARRIVED":
+                        motor.emergency_stop()
+                        arrival_dwell_ticks -= 1
+                        if arrival_dwell_ticks <= 0:
                             physical_mission_phase = "RETURN"
-                            sim_mode = SimMode.NAVIGATION   # keep exploration suppressed
+                            sim_mode = SimMode.NAVIGATION
                             goal = physical_mission_start
-                            needs_replan = True
-                            hud.set_alert("TARGET REACHED — RETURNING TO START", 3.0)
-                            _detail = ("Navigation target reached and return initiated. Physical payload release/receipt confirmation is not actuated by this build.")
-                            dashboard_control_state.finish_mission(dashboard_active_mission_id, True, _detail)
-                            dashboard_active_mission_id = None
-                            dashboard_mission_target = None
-                            dashboard_control_state.add_event("warning", "Target reached", "Verify payload transfer manually; no compartment actuator is integrated.")
-                            print("[main] DELIVERY TARGET REACHED; physical payload transfer requires manual confirmation; returning to start")
-                        elif physical_mission_phase == "RETURN":
-                            physical_mission_phase = "STOP"
-                            sim_mode = SimMode.READY        # prevent exploration re-entry
-                            motor.emergency_stop()
-                            dashboard_armed = False
-                            dashboard_control_state.add_event("success", "Return to start complete", "Motors stopped. Precision ArUco docking is not integrated.")
-                            print("[main] RETURN COMPLETE — motors stopped; precision docking remains deferred")
+                            cost_fn, free_fn, near_wall_fn, grid_fn = planner_callbacks(slam)
+                            path = planner.plan_path(
+                                start=(int(vehicle_state.x), int(vehicle_state.y)),
+                                goal=goal, get_cost_fn=cost_fn, is_free_fn=free_fn,
+                                is_near_wall_fn=near_wall_fn,
+                                map_width=MAP_WIDTH, map_height=MAP_HEIGHT,
+                            )
+                            hud.set_alert("RETURNING TO START / DOCK", 3.0)
+                            dashboard_control_state.add_event("info", "Returning to Start", "Navigating back to start position.")
+                            print("[main] RETURN INITIATED — returning to start pose")
+
+                    elif physical_mission_phase == "RETURN" and planner.path_complete:
+                        physical_mission_phase = "STOP"
+                        sim_mode = SimMode.READY        # prevent exploration re-entry
+                        motor.emergency_stop()
+                        dashboard_armed = False
+                        hud.set_alert("RETURN COMPLETE — ROBOT PARKED", 4.0)
+                        dashboard_control_state.add_event("success", "Return Complete", "Robot safely parked at start position.")
+                        print("[main] RETURN COMPLETE — motors stopped at base pose")
 
                     if physical_mission_phase in ("DELIVER", "RETURN"):
                         cost_fn, free_fn, near_wall_fn, grid_fn = planner_callbacks(slam)
@@ -1405,7 +1477,7 @@ def main() -> None:
                                 f"right_dir={motor_cmd.dir_b}"
                             )
 
-                elif HARDWARE_MODE and physical_mission_phase in ("STOP", "READY"):
+                elif HARDWARE_MODE and physical_mission_phase in ("STOP", "READY", "ARRIVED"):
                     motor_cmd = MotorCommand()
                 elif motor.mode == DriveMode.AUTONOMOUS and not motor.emergency_stopped:
 
@@ -1891,22 +1963,31 @@ def main() -> None:
                         _state_label = "disarmed"
                     elif motor.mode == DriveMode.MANUAL:
                         _state_label = "manual"
+                    elif _phase == "ARRIVED":
+                        _state_label = "delivered"
+                    elif _phase == "DELIVER":
+                        _state_label = "delivering"
+                    elif _phase == "RETURN":
+                        _state_label = "returning"
                     else:
                         _state_label = str(_phase).lower()
-                    if _active:
+
+                    if _phase == "ARRIVED":
+                        _task = f"DELIVERY COMPLETED! Arrived at destination ({int(motor.x)}, {int(motor.y)}). Payload delivered."
+                    elif _active:
                         _task = f"Deliver {str(_active.get('payload') or 'payload')} to {str(_active.get('label') or 'target')}"
                     elif motor.mode == DriveMode.MANUAL and dashboard_armed:
                         _task = "Manual driving (hold a direction button)"
                     elif _phase == "EXPLORE" and dashboard_armed:
                         _task = "Exploring and building the SLAM map"
                     elif _phase == "READY":
-                        _task = "Map ready; submit a delivery request"
+                        _task = "Map ready; select a delivery target on map"
                     elif _phase == "DELIVER":
-                        _task = "Navigating to the selected SLAM target"
+                        _task = f"Navigating to delivery target ({int(goal[0]) if goal else '?'}, {int(goal[1]) if goal else '?'})"
                     elif _phase == "RETURN":
                         _task = "Returning to the recorded start position"
                     elif _phase == "STOP":
-                        _task = "Mission stopped"
+                        _task = "Mission complete; vehicle parked"
                     else:
                         _task = "Waiting for operator command"
 
@@ -1966,7 +2047,7 @@ def main() -> None:
                         elif planner.path:
                             _active_path = [[float(x), float(y)] for x, y in (planner.path or [])]
                             _active_goal = list(physical_mission_goal) if physical_mission_goal is not None else (
-                                list(goal) if _phase in ("DELIVER", "RETURN") and goal is not None else None)
+                                list(goal) if _phase in ("DELIVER", "RETURN", "ARRIVED") and goal is not None else None)
 
                         _map_payload = {
                             "width": int(_gw), "height": int(_gh),

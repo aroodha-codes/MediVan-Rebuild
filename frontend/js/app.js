@@ -156,7 +156,17 @@
       const speed = Number(s.speed_ms || 0);
       const ctrl = s.control || {};
       const drive = String(ctrl.effective_drive || ctrl.drive || '').toLowerCase();
-      if (drive && drive !== 'stop' && !drive.includes('stop')) {
+      const stateLabel = String(s.state || '').toLowerCase();
+      if (stateLabel === 'delivered') {
+        motionBadge.textContent = 'DELIVERY COMPLETE (Target Reached)';
+        motionBadge.style.background = '#0E7C86';
+      } else if (stateLabel === 'delivering') {
+        motionBadge.textContent = `Delivering (${speed.toFixed(2)} m/s)`;
+        motionBadge.style.background = '#2e7d32';
+      } else if (stateLabel === 'returning') {
+        motionBadge.textContent = `Returning to Base (${speed.toFixed(2)} m/s)`;
+        motionBadge.style.background = '#E8A33D';
+      } else if (drive && drive !== 'stop' && !drive.includes('stop')) {
         motionBadge.textContent = `Moving: ${drive.toUpperCase()} (${speed.toFixed(2)} m/s)`;
         motionBadge.style.background = '#2e7d32';
       } else if (speed > 0.02) {
@@ -166,6 +176,12 @@
         motionBadge.textContent = 'Robot Stationary';
         motionBadge.style.background = '#4A5866';
       }
+    }
+
+    if (String(s.state || '').toLowerCase() === 'delivered' && state.lastNotifiedDelivered !== s.task) {
+      state.lastNotifiedDelivered = s.task;
+      toast('ok', 'Delivery Complete!', s.task || 'Arrived at delivery destination.');
+      refreshMissions();
     }
 
     const control = s.control || {};
