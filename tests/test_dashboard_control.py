@@ -105,7 +105,7 @@ def test_manual_direction_conversion_is_consistent_and_bounded():
     assert (forward.dir_a, forward.dir_b) == (MotorDirection.FWD, MotorDirection.FWD)
 
     left = build_manual_motor_command("left", pwm=500)
-    assert (left.pwm_a, left.pwm_b) == (120, 120)
+    assert (left.pwm_a, left.pwm_b) == (150, 150)
     assert (left.dir_a, left.dir_b) == (MotorDirection.REV, MotorDirection.FWD)
 
     right = build_manual_motor_command("right", pwm=100)

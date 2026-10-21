@@ -356,14 +356,13 @@ class SLAMEngine:
                          math.cos(desired - robot_theta))
 
         if abs(err) > 0.50:
-            # Large error -> pivot in place
-            turn_pwm = min(150, max(120, int(base_pwm * 0.9)))
+            # Large error -> pivot in place with symmetric 175 PWM boost
+            turn_pwm = min(175, max(120, int(base_pwm * 1.25)))
             if err > 0:
                 # Target is to the right (desired > theta): pivot right (increasing theta)
-                turn_right_pwm = min(175, int(turn_pwm * 1.25))
-                return MotorCommand(turn_right_pwm, turn_right_pwm,
+                return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
-            # Target is to the left (desired < theta): pivot left (decreasing theta)
+            # Target is to the left (desired < theta): pivot left (same 175 PWM to left)
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 

@@ -291,7 +291,8 @@ def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: 
     if direction == "reverse":
         return MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.REV)
     if direction == "left":
-        return MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.FWD)
+        pwm_l = max(0, min(int(pwm * 1.25), int(max_pwm * 1.25)))
+        return MotorCommand(pwm_l, pwm_l, MotorDirection.REV, MotorDirection.FWD)
     if direction == "right":
         pwm_r = max(0, min(int(pwm * 1.25), int(max_pwm * 1.25)))
         return MotorCommand(pwm_r, pwm_r, MotorDirection.FWD, MotorDirection.REV)

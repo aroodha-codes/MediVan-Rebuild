@@ -203,7 +203,7 @@ class MotorDriverHW:
         if keys[pygame.K_SPACE]:
             return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
 
-        pwm = 160
+        pwm = 175
         cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
 
         if keys[pygame.K_w]:
@@ -211,10 +211,11 @@ class MotorDriverHW:
         elif keys[pygame.K_s]:
             cmd = MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.REV)
         elif keys[pygame.K_a]:
-            cmd = MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.FWD)
+            pwm_turn = min(255, int(pwm * 1.25))
+            cmd = MotorCommand(pwm_turn, pwm_turn, MotorDirection.REV, MotorDirection.FWD)
         elif keys[pygame.K_d]:
-            pwm_r = min(255, int(pwm * 1.25))
-            cmd = MotorCommand(pwm_r, pwm_r, MotorDirection.FWD, MotorDirection.REV)
+            pwm_turn = min(255, int(pwm * 1.25))
+            cmd = MotorCommand(pwm_turn, pwm_turn, MotorDirection.FWD, MotorDirection.REV)
 
         return cmd
 

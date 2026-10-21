@@ -1016,13 +1016,12 @@ class PathPlanner:
 
         # Large heading error: pivot in place towards the waypoint
         if abs(angle_to_la) > 0.45:
-            turn_pwm = min(150, max(120, int(base * 0.9)))
+            turn_pwm = min(175, max(120, int(base * 1.25)))
             if angle_to_la > 0:
                 # Target is to the right (desired > theta): pivot right with boosted rotation torque
-                turn_right_pwm = min(175, int(turn_pwm * 1.25))
-                return MotorCommand(turn_right_pwm, turn_right_pwm,
+                return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
-            # Target is to the left (desired < theta): pivot left
+            # Target is to the left (desired < theta): pivot left (same 175 PWM to left)
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 

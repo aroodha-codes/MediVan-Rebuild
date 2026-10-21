@@ -668,7 +668,7 @@ def main() -> None:
             motor.emergency_stop()
             print("[dashboard-control] Hardware motion disarmed; choose Manual driving or Start mission.")
             print("[dashboard-control] (To start immediately without opening the dashboard, use: python3 -u main.py --start)")
-            print("[dashboard-control] Manual mode is capped at PWM 140; it is operator-controlled and requires direct supervision.")
+            print("[dashboard-control] Manual mode is capped at PWM 175; it is operator-controlled and requires direct supervision.")
     # <<< MEDIVAN DASHBOARD CONTROL (release candidate)
 
     try:
@@ -1528,7 +1528,7 @@ def main() -> None:
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=140,
+                    pwm=175,
                 )
                 if _dashboard_override is not None:
                     motor_cmd = _dashboard_override
