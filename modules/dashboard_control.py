@@ -20,7 +20,7 @@ _ALLOWED_COMMANDS = {
     "finish-explore", "save-map",
 }
 _ALLOWED_DIRECTIONS = {"stop", "forward", "reverse", "left", "right"}
-_MANUAL_DEADMAN_S = 0.75
+_MANUAL_DEADMAN_S = 1.5
 
 
 def _now_iso() -> str:
@@ -182,7 +182,7 @@ class DashboardCommandState:
             if direction == "stop":
                 self._set_drive_unlocked("stop")
             else:
-                timeout_s = max(0.10, min(float(timeout_s), 0.75))
+                timeout_s = max(0.10, min(float(timeout_s), 1.5))
                 self._drive_direction = direction
                 self._drive_deadline = time.monotonic() + timeout_s
 

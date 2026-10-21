@@ -429,24 +429,35 @@
       }
     });
 
-    // Press-and-hold joystick: refresh every 140 ms; server stops after 400 ms
+    // Press-and-hold joystick: refresh every 200 ms; server stops after 1.5 s
     // without a refresh, so a lost browser/network release does not keep driving.
     let dashboardDriveTimer = null;
     let dashboardDriveDirection = null;
-    let dashboardDriveChain = Promise.resolve();
-    function sendDashboardDrive(direction) {
-      // Keep command order deterministic if the Wi-Fi/API is slower than the 140 ms heartbeat.
-      dashboardDriveChain = dashboardDriveChain.then(() => API.robot.drive(direction));
-      dashboardDriveChain = dashboardDriveChain.catch(err => {
-        dashboardDriveDirection = null;
-        if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
-        toast('bad', 'Manual drive failed', err.message || String(err));
-      });
-      return dashboardDriveChain;
+    let dashboardDriveInFlight = false;
+    let dashboardDriveFailures = 0;
+    async function sendDashboardDrive(direction) {
+      if (!dashboardDriveDirection && direction !== 'stop') return;
+      if (dashboardDriveInFlight) return; // avoid piling up redundant HTTP requests
+      dashboardDriveInFlight = true;
+      try {
+        await API.robot.drive(direction);
+        dashboardDriveFailures = 0;
+      } catch (err) {
+        dashboardDriveFailures++;
+        if (dashboardDriveFailures >= 4) {
+          dashboardDriveDirection = null;
+          if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
+          toast('bad', 'Manual drive stopped', err.message || String(err));
+        }
+      } finally {
+        dashboardDriveInFlight = false;
+      }
     }
     function stopDashboardDrive() {
       const wasDriving = !!dashboardDriveDirection;
       dashboardDriveDirection = null;
+      dashboardDriveInFlight = false;
+      dashboardDriveFailures = 0;
       if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
       if (wasDriving && API.source === 'http') sendDashboardDrive('stop');
     }
@@ -484,7 +495,7 @@
         sendDashboardDrive(dashboardDriveDirection);
         dashboardDriveTimer = setInterval(() => {
           if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-        }, 140);
+        }, 200);
       });
       ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(name =>
         btn.addEventListener(name, stopDashboardDrive));
@@ -516,7 +527,7 @@
       sendDashboardDrive(dashboardDriveDirection);
       dashboardDriveTimer = setInterval(() => {
         if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-      }, 140);
+      }, 200);
     });
     window.addEventListener('keyup', e => {
       if (API.source !== 'http') return;
