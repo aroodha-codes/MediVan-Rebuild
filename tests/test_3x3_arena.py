@@ -337,3 +337,47 @@ def test_3x3_pivot_pwm_floor_torque(clean_3x3_slam):
     assert cmd_plan_pivot.pwm_a >= 165, f"Planner pivot PWM must overcome floor friction (got {cmd_plan_pivot.pwm_a})"
 
 
+def test_3x3_forward_drive_pwm_floor_and_deadband(clean_3x3_slam):
+    """Verify that when driving forward:
+    1. Both wheels maintain >= 165 PWM (above L298N/TT motor stall threshold) even during steering.
+    2. Small heading errors (< 0.20 rad / 11.5 deg) apply pure symmetric drive (pwm_a == pwm_b).
+    """
+    slam = clean_3x3_slam
+    slam._frontier_path = [(40, 30), (45, 32)]  # forward with slight right angle
+    slam._frontier_idx = 0
+    slam._frontier_goal = (45, 32)
+    slam._pivoting = False
+
+    # Heading aligned within deadband
+    desired_theta = math.atan2(320 - 300, 450 - 400)
+    cmd_straight = slam.get_explore_command(400.0, 300.0, desired_theta)
+    assert cmd_straight.dir_a == MotorDirection.FWD and cmd_straight.dir_b == MotorDirection.FWD
+    assert cmd_straight.pwm_a >= 180 and cmd_straight.pwm_b >= 180
+    assert cmd_straight.pwm_a == cmd_straight.pwm_b, "Aligned forward drive must be symmetric"
+
+    # Heading offset ~0.40 rad: curved forward drive
+    cmd_curve = slam.get_explore_command(400.0, 300.0, desired_theta - 0.40)
+    assert cmd_curve.dir_a == MotorDirection.FWD and cmd_curve.dir_b == MotorDirection.FWD
+    assert cmd_curve.pwm_a >= 165, f"Left wheel must not drop into stall zone (got {cmd_curve.pwm_a})"
+    assert cmd_curve.pwm_b >= 165, f"Right wheel must not drop into stall zone (got {cmd_curve.pwm_b})"
+    assert cmd_curve.pwm_a != cmd_curve.pwm_b, "Curved drive must provide differential steering"
+
+    # PathPlanner forward drive
+    planner = PathPlanner()
+    planner.path = [(400, 300), (450, 320)]
+    planner._pivoting = False
+
+    state_straight = VehicleState(x=400.0, y=300.0, theta=desired_theta)
+    cmd_plan_straight = planner.follow_path(state_straight)
+    assert cmd_plan_straight.dir_a == MotorDirection.FWD and cmd_plan_straight.dir_b == MotorDirection.FWD
+    assert cmd_plan_straight.pwm_a >= 180 and cmd_plan_straight.pwm_b >= 180
+    assert cmd_plan_straight.pwm_a == cmd_plan_straight.pwm_b
+
+    state_curve = VehicleState(x=400.0, y=300.0, theta=desired_theta - 0.40)
+    cmd_plan_curve = planner.follow_path(state_curve)
+    assert cmd_plan_curve.dir_a == MotorDirection.FWD and cmd_plan_curve.dir_b == MotorDirection.FWD
+    assert cmd_plan_curve.pwm_a >= 165, f"Planner left wheel must be >= 165 (got {cmd_plan_curve.pwm_a})"
+    assert cmd_plan_curve.pwm_b >= 165, f"Planner right wheel must be >= 165 (got {cmd_plan_curve.pwm_b})"
+
+
+

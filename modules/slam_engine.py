@@ -375,7 +375,7 @@ class SLAMEngine:
 
         if self._pivoting:
             err_mag = abs(err)
-            turn_pwm = int(max(165, min(185, 155 + err_mag * 15)))
+            turn_pwm = int(max(175, min(190, 165 + err_mag * 15)))
             if err > 0:
                 # Target is to the right (clockwise): left wheel FWD, right wheel REV
                 return MotorCommand(turn_pwm, turn_pwm,
@@ -384,11 +384,19 @@ class SLAMEngine:
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 
-
         # Aligned -> drive forward with smooth differential steering
-        corr = int(max(-0.30, min(0.30, err * 0.70)) * base_pwm)
-        left = max(130, min(255, base_pwm + corr))
-        right = max(130, min(255, base_pwm - corr))
+        base_drive = max(185, base_pwm)
+        if abs(err) < 0.20:
+            # Well aligned: drive straight forward with equal power to both wheels
+            # avoiding any yaw oscillations or differential stall.
+            return MotorCommand(base_drive, base_drive,
+                                MotorDirection.FWD, MotorDirection.FWD)
+
+        # Gentle differential steering: clamp correction to +/-20 PWM and ensure both wheels
+        # remain at or above 165 PWM so the inner wheel NEVER stalls under chassis load.
+        corr = int(max(-20, min(20, err * 35)))
+        left = max(165, min(220, base_drive + corr))
+        right = max(165, min(220, base_drive - corr))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)
 

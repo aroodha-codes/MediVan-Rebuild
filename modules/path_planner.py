@@ -986,7 +986,7 @@ class PathPlanner:
         if self._pivoting:
             err_mag = abs(angle_to_la)
             # Ensure sufficient torque without violent inertial overshoot
-            turn_pwm = int(max(165, min(185, 155 + err_mag * 15)))
+            turn_pwm = int(max(175, min(190, 165 + err_mag * 15)))
             if angle_to_la > 0:
                 # Target is to the right (desired > theta): pivot right
                 return MotorCommand(turn_pwm, turn_pwm,
@@ -995,14 +995,26 @@ class PathPlanner:
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 
-
         # Small heading error: drive forward with smooth differential steering
         vfh_factor = getattr(self, "_vfh_speed_factor", 1.0)
-        base = max(175, BASE_PWM)
-        effective_base = max(150, int(base * vfh_factor))
-        corr = int(max(-0.30, min(0.30, angle_to_la * 0.70)) * effective_base)
-        pwm_left = max(130, min(255, effective_base + corr))
-        pwm_right = max(130, min(255, effective_base - corr))
+        base = max(185, BASE_PWM)
+        effective_base = max(170, int(base * vfh_factor))
+
+        # Deadband: if heading error is small (< 11.5 deg / 0.20 rad), drive straight with equal power
+        # avoiding any yaw oscillations or differential stall.
+        if abs(angle_to_la) < 0.20:
+            return MotorCommand(
+                effective_base,
+                effective_base,
+                MotorDirection.FWD,
+                MotorDirection.FWD,
+            )
+
+        # Gentle differential trim: clamp correction to +/-20 PWM and ensure both wheels
+        # remain at or above 165 PWM so the inner wheel NEVER stalls under chassis load.
+        corr = int(max(-20, min(20, angle_to_la * 35)))
+        pwm_left = max(165, min(220, effective_base + corr))
+        pwm_right = max(165, min(220, effective_base - corr))
 
         return MotorCommand(
             int(pwm_left),
