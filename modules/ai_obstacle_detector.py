@@ -359,6 +359,9 @@ class AIObstacleDetector:
         # MOG2 fallback.
         self.bg_subtractor = None
 
+        # Input size (auto-detected from ONNX export)
+        self.input_size = YOLO_INPUT_SIZE
+
         # Load YOLO.
         self._load_model()
 
@@ -428,10 +431,22 @@ class AIObstacleDetector:
             self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
             self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
+            # Auto-detect model input size (e.g. 320 for yolov8n, 640 for yolo11n)
+            self.input_size = YOLO_INPUT_SIZE
+            for test_size in (YOLO_INPUT_SIZE, 640, 320):
+                try:
+                    dummy = np.zeros((1, 3, test_size, test_size), dtype=np.float32)
+                    self.net.setInput(dummy)
+                    self.net.forward()
+                    self.input_size = test_size
+                    break
+                except Exception:
+                    continue
+
             self.model_loaded = True
             self.using_heuristic = False
 
-            print(f"[AI] {model_name} model loaded successfully.")
+            print(f"[AI] {model_name} model loaded successfully (input size: {self.input_size}x{self.input_size}).")
 
         except Exception as e:
 
@@ -485,13 +500,13 @@ class AIObstacleDetector:
         blob = cv2.dnn.blobFromImage(
             frame,
             scalefactor=1.0 / 255.0,
-            size=(YOLO_INPUT_SIZE, YOLO_INPUT_SIZE),
+            size=(self.input_size, self.input_size),
             swapRB=True,
             crop=False,
         )
 
-        scale_x = w / float(YOLO_INPUT_SIZE)
-        scale_y = h / float(YOLO_INPUT_SIZE)
+        scale_x = w / float(self.input_size)
+        scale_y = h / float(self.input_size)
 
         return blob, scale_x, scale_y
 
