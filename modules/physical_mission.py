@@ -54,7 +54,13 @@ def planner_callbacks(slam):
 
     def grid(x: int, y: int):
         from config import CellType
-        return CellType.FREE if free(x, y) else CellType.WALL
+        gx, gy = int(x) // resolution, int(y) // resolution
+        if 0 <= gx < slam.grid.shape[1] and 0 <= gy < slam.grid.shape[0]:
+            if slam.grid[gy, gx] > 0.4:
+                return CellType.WALL
+            return CellType.FREE
+        return CellType.WALL
+
 
     return cost, safe, near_wall, grid
 
