@@ -814,23 +814,50 @@ def main() -> None:
                         print(f"[dashboard-control] Armed; command={_dash_name} phase={physical_mission_phase}")
 
                     elif _dash_name in ("finish-explore", "save-map"):
-                        dashboard_armed = False
-                        dashboard_control_state.set_drive("stop")
-                        motor.emergency_stop()
                         if HARDWARE_MODE and slam is not None:
                             slam.mapping_complete = True
                             try:
                                 slam.save_map("output/slam_map.png")
                             except Exception as _e:
                                 print(f"[main] Failed saving SLAM map: {_e}")
-                            physical_mission_phase = "READY"
-                            sim_mode = SimMode.READY
-                            planner.path = []
-                            dashboard_control_state.add_event(
-                                "success", "Map Saved & Verified",
-                                "Exploration complete. Click a delivery target on the Live Map to dispatch."
-                            )
-                            print("[main] SLAM exploration finished by operator. Map saved. Ready for delivery.")
+                            if physical_mission_phase in ("DELIVER", "RETURN", "ARRIVED"):
+                                print(f"[main] Map saved. Continuing in-progress delivery ({physical_mission_phase}).")
+                            else:
+                                candidate = select_reachable_destination(slam, motor.x, motor.y)
+                                if candidate is not None and math.hypot(candidate[0] - motor.x, candidate[1] - motor.y) >= 15:
+                                    physical_mission_goal = candidate
+                                    goal = candidate
+                                    cost_fn, free_fn, near_wall_fn, _ = planner_callbacks(slam)
+                                    planner.path = []
+                                    path = planner.plan_path(
+                                        start=(int(motor.x), int(motor.y)), goal=goal,
+                                        get_cost_fn=cost_fn, is_free_fn=free_fn,
+                                        is_near_wall_fn=near_wall_fn,
+                                        map_width=MAP_WIDTH, map_height=MAP_HEIGHT,
+                                    )
+                                    if path:
+                                        physical_mission_phase = "DELIVER"
+                                        sim_mode = SimMode.NAVIGATION
+                                        arrival_dwell_ticks = 0
+                                        dashboard_armed = True
+                                        motor.mode = DriveMode.AUTONOMOUS
+                                        if hasattr(motor, "release_emergency"):
+                                            motor.release_emergency()
+                                        dashboard_control_state.add_event(
+                                            "success", "Map Saved & Delivery Dispatched",
+                                            f"Exploration complete. Navigating to delivery target {goal} ({len(path)} waypoints)."
+                                        )
+                                        print(f"[main] Map saved. Delivery automatically dispatched to {goal} ({len(path)} waypoints)!")
+                                    else:
+                                        physical_mission_phase = "READY"
+                                        dashboard_armed = False
+                                        motor.emergency_stop()
+                                        print("[main] Map saved. Exploration complete; select a target on the Live Map to dispatch.")
+                                else:
+                                    physical_mission_phase = "READY"
+                                    dashboard_armed = False
+                                    motor.emergency_stop()
+                                    print("[main] Map saved. Exploration complete; select a target on the Live Map to dispatch.")
 
                     elif _dash_name == "reset":
                         dashboard_armed = False
@@ -2097,7 +2124,7 @@ def main() -> None:
                         })
                     _frame_uri = None
                     if cam_frame is not None:
-                        _enc_ok, _enc = cv2.imencode(".jpg", cam_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+                        _enc_ok, _enc = cv2.imencode(".jpg", cam_frame, [cv2.IMWRITE_JPEG_QUALITY, 45])
                         if _enc_ok:
                             _frame_uri = "data:image/jpeg;base64," + base64.b64encode(_enc.tobytes()).decode("ascii")
                     _camera_payload = {

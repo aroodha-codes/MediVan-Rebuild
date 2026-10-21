@@ -55,22 +55,17 @@ class DashboardBridge:
     def publish(self, status: dict[str, Any], map_payload: dict[str, Any],
                 camera_payload: dict[str, Any]) -> None:
         """Atomically publish serializable snapshots from the single robot loop."""
-        safe_status = json.loads(json.dumps(status, allow_nan=False))
-        safe_map = json.loads(json.dumps(map_payload, allow_nan=False))
-        safe_camera = json.loads(json.dumps(camera_payload, allow_nan=False))
         with self._lock:
-            self._status = safe_status
-            # The trail is maintained by the main-loop publisher; keep the supplied map
-            # payload exact so the map pose/path/cell coordinate contract stays explicit.
-            self._map = safe_map
-            self._camera = safe_camera
-            self._trail.append([float(safe_status.get("x", 0.0)), float(safe_status.get("y", 0.0))])
+            self._status = dict(status)
+            self._map = dict(map_payload)
+            self._camera = dict(camera_payload)
+            self._trail.append([float(status.get("x", 0.0)), float(status.get("y", 0.0))])
             key_map = {
                 "coverage": "coverage_pct", "battery": "battery_pct", "cpu": "cpu_pct",
                 "ram": "ram_mb", "fps": "fps", "speed": "speed_ms", "drift": "drift_px",
             }
             for series_key, status_key in key_map.items():
-                value = safe_status.get(status_key)
+                value = status.get(status_key)
                 if value is not None:
                     try:
                         v = float(value)
@@ -78,7 +73,7 @@ class DashboardBridge:
                             self._series[series_key].append(v)
                     except (TypeError, ValueError):
                         pass
-            path = safe_map.get("path") or []
+            path = map_payload.get("path") or []
             if path:
                 self._series["path"].append(sum(
                     ((path[i][0] - path[i - 1][0]) ** 2 + (path[i][1] - path[i - 1][1]) ** 2) ** 0.5
@@ -89,6 +84,7 @@ class DashboardBridge:
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "MediVanDashboard/1.0"
+            protocol_version = "HTTP/1.1"
 
             def log_message(self, fmt: str, *args: Any) -> None:
                 # Avoid flooding the hardware loop's console with dashboard polling.

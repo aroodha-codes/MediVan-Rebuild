@@ -346,6 +346,7 @@ class DashboardControlServer:
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "MediVanControl/2.0"
+            protocol_version = "HTTP/1.1"
 
             def log_message(self, fmt: str, *args: Any) -> None:
                 return
