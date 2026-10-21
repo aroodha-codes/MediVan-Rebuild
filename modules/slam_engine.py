@@ -122,6 +122,8 @@ class SLAMEngine:
         robot_x: float, robot_y: float, robot_theta: float,
         ai_results: Optional[List[ObstacleResult]] = None,
         scan=None,
+        vis_obstacles: Optional[List[Tuple[float, float, float]]] = None,
+        vis_ground: Optional[List[Tuple[float, float]]] = None,
     ) -> float:
         """Run one SLAM cycle: predict, observe, update grid.
 
@@ -146,6 +148,30 @@ class SLAMEngine:
             walls, frees = self._extract_walls_from_camera(
                 cam_frame, robot_x, robot_y, robot_theta
             )
+
+        # Incorporate 3D triangulated obstacles and ground features (Pi-SLAM)
+        res = SLAM_GRID_RESOLUTION
+        if vis_obstacles:
+            rx_cell, ry_cell = int(robot_x) // res, int(robot_y) // res
+            for ox, oy, _ in vis_obstacles:
+                gx_o, gy_o = int(ox) // res, int(oy) // res
+                if 0 <= gx_o < _GW and 0 <= gy_o < _GH:
+                    walls.append((gx_o, gy_o))
+                    # Ray from robot to obstacle is free space
+                    dist_cells = int(math.hypot(gx_o - rx_cell, gy_o - ry_cell))
+                    for step in range(1, max(1, dist_cells)):
+                        frac = step / max(1.0, float(dist_cells))
+                        fx = int(rx_cell + frac * (gx_o - rx_cell))
+                        fy = int(ry_cell + frac * (gy_o - ry_cell))
+                        if 0 <= fx < _GW and 0 <= fy < _GH:
+                            frees.append((fx, fy))
+
+        if vis_ground:
+            for gx_pt, gy_pt in vis_ground:
+                gx_g, gy_g = int(gx_pt) // res, int(gy_pt) // res
+                if 0 <= gx_g < _GW and 0 <= gy_g < _GH:
+                    frees.append((gx_g, gy_g))
+
 
         # On hardware / real-camera (no ground-truth map), guard against floor
         # glare/shadows starving frontier generation when no obstacle is present:
@@ -968,7 +994,21 @@ class SLAMEngine:
 
             self.particles = new_particles
 
+    def on_loop_closure(
+        self, corr_x: float, corr_y: float, corr_theta: float
+    ) -> None:
+        """Update particle filter poses when visual loop closure occurs (ORB-SLAM3)."""
+        if not self._particles_initialized:
+            return
+        damping = 0.75
+        self.particles[:, 0] += corr_x * damping
+        self.particles[:, 1] += corr_y * damping
+        self.particles[:, 2] += corr_theta * damping
+        # Reset weights uniformly
+        self.particles[:, 3] = 1.0 / SLAM_NUM_PARTICLES
+
     def _grid_is_free(self, x: int, y: int) -> bool:
+
         """Check if a pixel position is free according to SLAM grid."""
         gx = int(x) // SLAM_GRID_RESOLUTION
         gy = int(y) // SLAM_GRID_RESOLUTION

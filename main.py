@@ -244,9 +244,11 @@ from modules.hud import HUD
 from modules.data_logger import DataLogger
 
 from modules.slam_engine import SLAMEngine
+from modules.visual_odometry import VisualOdometry
 
 from modules.delivery_queue import DeliveryQueue
 from modules.physical_mission import planner_callbacks, select_reachable_destination
+
 
 
 
@@ -501,6 +503,8 @@ def main() -> None:
     # Shared generic modules
 
     localizer = Localizer()
+
+    visual_odom = VisualOdometry()
 
     planner = PathPlanner()
 
@@ -871,7 +875,9 @@ def main() -> None:
                                     dashboard_control_state.finish_mission(_mid.get("id"), False, "Map reset by operator.")
                             slam = SLAMEngine()
                             slam.initialize(motor.x, motor.y, motor.theta)
+                            visual_odom.reset()
                             physical_mission_start = (float(motor.x), float(motor.y))
+
                             physical_mission_goal = None
                             physical_mission_phase = "EXPLORE"
                             sim_mode = SimMode.MAPPING
@@ -1101,48 +1107,58 @@ def main() -> None:
             # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             try:
-
                 enc_reading = encoder.update(
-
                     motor.pwm_a, motor.pwm_b,
-
                     motor.dir_a, motor.dir_b,
-
                     dt=dt, theta=motor.theta,
-
                 )
+
+                # Feature-based Visual Odometry & Loop Closure (ORB-SLAM3 / Pi-SLAM)
+                vis_result = None
+                if cam_frame is not None:
+                    try:
+                        enc_step_dist = math.hypot(enc_reading.dx_px, enc_reading.dy_px)
+                        vis_result = visual_odom.track_frame(
+                            frame=cam_frame,
+                            enc_dist_px=enc_step_dist,
+                            robot_x=motor.x,
+                            robot_y=motor.y,
+                            robot_theta=motor.theta,
+                        )
+                    except Exception as _vo_err:
+                        vis_result = None
 
                 vehicle_state = localizer.update(
-
                     enc_dx=enc_reading.dx_px,
-
                     enc_dy=enc_reading.dy_px,
-
                     enc_dtheta=enc_reading.dtheta,
-
                     prev_gray=None if HARDWARE_MODE else prev_gray,
-
                     curr_gray=None if HARDWARE_MODE else curr_gray,
-
-
-
-                    # Never use hospital_map.png as ground truth on real hardware.
-
                     is_free_fn=None if HARDWARE_MODE else map_loader.is_free,
-
                     junctions=None if HARDWARE_MODE else map_loader.junctions,
-
-
-
-                    # Real MPU6050 heading measurement.
-
                     imu_yaw=imu_data.yaw if HARDWARE_MODE else None,
-
+                    vis_result=vis_result,
                 )
 
+                # Notify SLAM on visual loop closure place recognition
+                if vis_result is not None and vis_result.is_loop_closure and slam is not None:
+                    slam.on_loop_closure(
+                        vis_result.loop_correction_x,
+                        vis_result.loop_correction_y,
+                        vis_result.loop_correction_theta,
+                    )
+                    print(
+                        f"[SLAM] Visual Loop Closure! Matched KeyFrame #{vis_result.loop_keyframe_id} "
+                        f"offset=({vis_result.loop_correction_x:.1f}, {vis_result.loop_correction_y:.1f}) px. Drift eliminated."
+                    )
+                    if dashboard_control_state is not None:
+                        dashboard_control_state.add_event(
+                            "info", "Visual Loop Closure",
+                            f"Matched KeyFrame #{vis_result.loop_keyframe_id}; reset cumulative odometry drift."
+                        )
             except Exception:
-
                 vehicle_state = VehicleState(x=motor.x, y=motor.y, theta=motor.theta)
+
 
 
 
@@ -1207,30 +1223,17 @@ def main() -> None:
 
 
                     slam.update(
-
                         cam_frame,
-
                         enc_dx=enc_reading.dx_px,
-
                         enc_dy=enc_reading.dy_px,
-
                         enc_dtheta=enc_reading.dtheta,
-
                         robot_x=motor.x, robot_y=motor.y, robot_theta=motor.theta,
-
                         ai_results=obstacles,
-
-                        # Passing scan= bypasses _extract_walls_from_camera,
-
-                        # the legacy Canny path the SLAM module itself
-
-                        # documents as unreliable. None in simulation, so
-
-                        # that path is unchanged.
-
                         scan=real_scan,
-
+                        vis_obstacles=vis_result.obstacles_3d if vis_result else None,
+                        vis_ground=vis_result.ground_points_3d if vis_result else None,
                     )
+
                     if frame_count % 30 == 0:
                         _valid_rays = int(np.count_nonzero(real_scan.valid)) if real_scan is not None else 0
                         _hit_rays = int(np.count_nonzero(real_scan.hit & real_scan.valid)) if real_scan is not None else 0

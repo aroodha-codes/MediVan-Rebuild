@@ -34,6 +34,8 @@ from config import (
     JUNCTION_SNAP_DIST_PX, OPTICAL_FLOW_STRIDE,
     VehicleState,
 )
+from modules.visual_odometry import VisualOdometryResult
+
 
 
 # ── EKF tuning parameters ───────────────────────
@@ -113,6 +115,7 @@ class Localizer:
         junctions: Optional[List[Tuple[int, int]]] = None,
         imu_yaw: Optional[float] = None,
         imu_gyro_z: Optional[float] = None,
+        vis_result: Optional[VisualOdometryResult] = None,
     ) -> VehicleState:
         """Fuse encoder + visual odometry via EKF and return state.
 
@@ -121,11 +124,15 @@ class Localizer:
         enc_dx, enc_dy, enc_dtheta : float
             Dead-reckoning deltas from EncoderSim (pixel units / rad).
         prev_gray, curr_gray : np.ndarray or None
-            Consecutive greyscale camera frames for optical flow.
+            Consecutive greyscale camera frames for optical flow (fallback).
         is_free_fn : callable or None
             map_loader.is_free(x, y) for boundary checking.
         junctions : list of (x, y) or None
             Known junction positions from the map.
+        imu_yaw : float or None
+            MPU6050 complementary-filtered absolute yaw observation.
+        vis_result : VisualOdometryResult or None
+            ORB-SLAM3/Pi-SLAM feature-based visual odometry result.
 
         Returns
         -------
@@ -156,45 +163,64 @@ class Localizer:
         self._P = F @ self._P @ F.T + Q_PROCESS
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # EKF UPDATE — using visual odometry
+        # EKF UPDATE — using feature visual odometry (ORB-SLAM3/Pi-SLAM)
+        # or optical flow fallback
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        use_visual = (
+        vis_dx, vis_dy, vis_dtheta = 0.0, 0.0, 0.0
+        has_vis_meas = False
+        R_cov = R_MEASUREMENT.copy()
+
+        if vis_result is not None and vis_result.inliers >= 6 and vis_result.confidence > 0.05:
+            vis_dx = vis_result.dx_px
+            vis_dy = vis_result.dy_px
+            vis_dtheta = vis_result.dtheta
+            conf = max(0.1, min(1.0, vis_result.confidence))
+            R_cov = np.diag([4.0 / conf, 4.0 / conf, 0.05 / conf])
+            has_vis_meas = (abs(vis_dx) > 0.001 or abs(vis_dy) > 0.001 or abs(vis_dtheta) > 0.001)
+        elif (
             prev_gray is not None and curr_gray is not None and
             (self._frame % OPTICAL_FLOW_STRIDE == 0)
-        )
-
-        if use_visual:
+        ):
             vis_dx, vis_dy, vis_dtheta = self._compute_visual_odom(
                 prev_gray, curr_gray)
+            has_vis_meas = (abs(vis_dx) > 0.001 or abs(vis_dy) > 0.001)
 
-            if abs(vis_dx) > 0.001 or abs(vis_dy) > 0.001:
-                # Measurement z = predicted_state + visual_correction
-                z = np.array([
-                    self._state[0] + vis_dx,
-                    self._state[1] + vis_dy,
-                    self._state[2] + vis_dtheta,
-                ])
+        if has_vis_meas:
+            # Measurement z = predicted_state + visual_correction
+            z = np.array([
+                self._state[0] + vis_dx,
+                self._state[1] + vis_dy,
+                self._state[2] + vis_dtheta,
+            ])
 
-                # Observation matrix H (identity — we observe x, y, θ directly)
-                H = np.eye(3)
+            # Observation matrix H (identity — we observe x, y, θ directly)
+            H = np.eye(3)
 
-                # Innovation: y = z - H·x_predicted
-                y = z - H @ predicted_state
+            # Innovation: y = z - H·x_predicted
+            y = z - H @ predicted_state
+            y[2] = math.atan2(math.sin(y[2]), math.cos(y[2]))
 
-                # Innovation covariance: S = H·P·Hᵀ + R
-                S = H @ self._P @ H.T + R_MEASUREMENT
+            # Innovation covariance: S = H·P·Hᵀ + R
+            S = H @ self._P @ H.T + R_cov
 
-                # Kalman gain: K = P·Hᵀ·S⁻¹
-                try:
-                    K = self._P @ H.T @ np.linalg.inv(S)
-                except np.linalg.LinAlgError:
-                    K = np.zeros((3, 3))
+            # Kalman gain: K = P·Hᵀ·S⁻¹
+            try:
+                K = self._P @ H.T @ np.linalg.inv(S)
+            except np.linalg.LinAlgError:
+                K = np.zeros((3, 3))
 
-                # Updated state: x = x_predicted + K·y
-                predicted_state = predicted_state + K @ y
+            # Updated state: x = x_predicted + K·y
+            predicted_state = predicted_state + K @ y
+            predicted_state[2] = math.atan2(
+                math.sin(predicted_state[2]),
+                math.cos(predicted_state[2]),
+            )
 
-                # Updated covariance: P = (I - K·H)·P
-                self._P = (np.eye(3) - K @ H) @ self._P
+            # Updated covariance: Joseph form preserves positive definiteness
+            I_KH = np.eye(3) - K @ H
+            self._P = I_KH @ self._P @ I_KH.T + K @ R_cov @ K.T
+            self._P = 0.5 * (self._P + self._P.T)
+
 
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # MAP BOUNDARY CHECK
@@ -264,9 +290,20 @@ class Localizer:
             # filter has. Net effect was worse, so the snap runs every frame.
             self._try_junction_snap(junctions)
 
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # LOOP CLOSURE CORRECTION (ORB-SLAM3 style)
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if vis_result is not None and vis_result.is_loop_closure:
+            self.apply_loop_closure(
+                vis_result.loop_correction_x,
+                vis_result.loop_correction_y,
+                vis_result.loop_correction_theta,
+            )
+
         # ── Speed estimate ──────────────────────
         dist_px = math.sqrt(enc_dx ** 2 + enc_dy ** 2)
         self.speed_ms = dist_px * MAP_SCALE_M_PER_PX * 30
+
 
         # ── Confidence from covariance trace ────
         trace_P = np.trace(self._P)
@@ -424,6 +461,34 @@ class Localizer:
     def covariance_trace(self) -> float:
         """Trace of the EKF covariance matrix (uncertainty measure)."""
         return float(np.trace(self._P))
+
+    def apply_loop_closure(
+        self,
+        corr_x: float,
+        corr_y: float,
+        corr_theta: float,
+    ) -> None:
+        """Apply visual loop closure correction to eliminate cumulative odometry drift.
+
+        Parameters
+        ----------
+        corr_x, corr_y : float
+            Map pixel displacement correction to align with matched keyframe.
+        corr_theta : float
+            Heading correction in radians.
+        """
+        # Apply stable damped correction (75% step) to prevent sudden jerk
+        damping = 0.75
+        self._state[0] += corr_x * damping
+        self._state[1] += corr_y * damping
+        self._state[2] = math.atan2(
+            math.sin(self._state[2] + corr_theta * damping),
+            math.cos(self._state[2] + corr_theta * damping),
+        )
+        # Reset and tighten state covariance matrix to reflect place recognition certainty
+        self._P = np.diag([0.6, 0.6, 0.005])
+        self.odometry_confidence = min(1.0, self.odometry_confidence + 0.35)
+        self._update_public_state()
 
     def degrade_confidence(self, amount: float = 0.01) -> None:
         """Called on slip events to degrade odometry confidence."""
