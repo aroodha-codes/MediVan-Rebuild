@@ -253,7 +253,8 @@ class SLAMEngine:
         # threshold or when all reachable frontiers have been explored.
         coverage_fallback = (
             self.coverage >= SLAM_COVERAGE_THRESHOLD
-            or self._frontier_fail >= 30
+            or (self.coverage >= 0.75 and self._frontier_fail >= 30)
+            or self._frontier_fail >= 90
         )
 
         if (
@@ -301,7 +302,7 @@ class SLAMEngine:
         """
         free_fn = is_free_fn or self._gt_free_fn or self._grid_is_free
         res = SLAM_GRID_RESOLUTION
-        base_pwm = SLAM_WALL_FOLLOW_PWM
+        base_pwm = max(175, int(SLAM_WALL_FOLLOW_PWM))
 
         gx, gy = int(robot_x) // res, int(robot_y) // res
 
@@ -310,7 +311,7 @@ class SLAMEngine:
             self._frontier_goal is None
             or self._frontier_idx >= len(self._frontier_path)
         )
-        if not need_plan and self.frame_count % 45 == 0:
+        if not need_plan and self.frame_count % 30 == 0:
             # Periodic refresh: drop the goal if it is no longer a frontier.
             fgx, fgy = self._frontier_goal
             if not self._is_frontier(fgx, fgy):
@@ -324,54 +325,64 @@ class SLAMEngine:
                 self._frontier_idx = 0
                 self._frontier_fail = 0
             else:
-                # No reachable frontier: sweep in place to open new ones with boosted rotation torque.
+                # No reachable frontier: sweep in place to open new ones with full 175 PWM rotation torque.
                 self._frontier_fail += 1
                 self._frontier_goal = None
                 self._frontier_path = []
-                turn_pwm = min(160, int(base_pwm * 1.25))
+                turn_pwm = 175
                 return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
 
-        # ── advance the waypoint cursor ──────────────────────────────────
+        # ── advance the waypoint cursor with generous radius (18 px) ─────
         while self._frontier_idx < len(self._frontier_path):
             wx, wy = self._frontier_path[self._frontier_idx]
             px, py = wx * res + res // 2, wy * res + res // 2
-            if math.hypot(px - robot_x, py - robot_y) < res * 1.1:
+            if math.hypot(px - robot_x, py - robot_y) < res * 1.8:
                 self._frontier_idx += 1
             else:
                 break
 
+        # If reached end of current frontier path, smoothly transition to next frontier
         if self._frontier_idx >= len(self._frontier_path):
             self._frontier_goal = None
-            turn_pwm = min(160, int(base_pwm * 1.25))
-            return MotorCommand(turn_pwm, turn_pwm,
-                                MotorDirection.FWD, MotorDirection.REV)
+            self._frontier_path = []
+            goal, path = self._select_frontier_goal(gx, gy, free_fn)
+            if goal is not None and path:
+                self._frontier_path = path
+                self._frontier_goal = goal
+                self._frontier_idx = 0
+                self._frontier_fail = 0
+            else:
+                self._frontier_fail += 1
+                turn_pwm = 175
+                return MotorCommand(turn_pwm, turn_pwm,
+                                    MotorDirection.FWD, MotorDirection.REV)
 
-        wx, wy = self._frontier_path[self._frontier_idx]
+        # ── lookahead target (aim 2 waypoints ahead for smooth steering arcs) ──
+        la_idx = min(self._frontier_idx + 2, len(self._frontier_path) - 1)
+        wx, wy = self._frontier_path[la_idx]
         tx, ty = wx * res + res // 2, wy * res + res // 2
 
-        # ── proportional heading control ─────────────────────────────────
+        # ── proportional heading control with hysteresis ─────────────────
         desired = math.atan2(ty - robot_y, tx - robot_x)
         err = math.atan2(math.sin(desired - robot_theta),
                          math.cos(desired - robot_theta))
 
-        if abs(err) > 0.50:
-            # Large error -> pivot in place with symmetric 175 PWM boost
-            turn_pwm = min(175, max(120, int(base_pwm * 1.25)))
+        if abs(err) > 0.60:
+            # Significant angular misalignment -> smooth in-place pivot at PWM 175
+            turn_pwm = 175
             if err > 0:
-                # Target is to the right (desired > theta): pivot right (increasing theta)
+                # Target is to the right (clockwise): left wheel FWD, right wheel REV
                 return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
-            # Target is to the left (desired < theta): pivot left (same 175 PWM to left)
+            # Target is to the left (counter-clockwise): left wheel REV, right wheel FWD
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 
-        # Small error -> drive forward with a differential correction.
-        corr = int(max(-0.5, min(0.5, err * 1.1)) * base_pwm)
-        left = max(PWM_DEADBAND + 30, min(255, base_pwm + corr))
-        right = max(PWM_DEADBAND + 30, min(255, base_pwm - corr))
-        if err > 0:
-            left = min(255, int(left * 1.15))
+        # Small/moderate error -> drive forward with symmetric differential steering
+        corr = int(max(-0.45, min(0.45, err * 0.95)) * base_pwm)
+        left = max(PWM_DEADBAND + 35, min(255, base_pwm + corr))
+        right = max(PWM_DEADBAND + 35, min(255, base_pwm - corr))
         return MotorCommand(int(left), int(right),
                             MotorDirection.FWD, MotorDirection.FWD)
 

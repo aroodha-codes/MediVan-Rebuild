@@ -1954,14 +1954,27 @@ def main() -> None:
                                         break
                             if len(_frontiers) >= 350:
                                 break
+                        _res = int(SLAM_GRID_RESOLUTION)
+                        _active_path = []
+                        _active_goal = None
+                        if _phase == "EXPLORE" and slam is not None and getattr(slam, "_frontier_path", None):
+                            _active_path = [[float(wx * _res + _res // 2), float(wy * _res + _res // 2)]
+                                            for wx, wy in slam._frontier_path]
+                            if getattr(slam, "_frontier_goal", None) is not None:
+                                _active_goal = [float(slam._frontier_goal[0] * _res + _res // 2),
+                                                float(slam._frontier_goal[1] * _res + _res // 2)]
+                        elif planner.path:
+                            _active_path = [[float(x), float(y)] for x, y in (planner.path or [])]
+                            _active_goal = list(physical_mission_goal) if physical_mission_goal is not None else (
+                                list(goal) if _phase in ("DELIVER", "RETURN") and goal is not None else None)
+
                         _map_payload = {
                             "width": int(_gw), "height": int(_gh),
                             "cell": int(SLAM_GRID_RESOLUTION), "cells": _cells,
                             "pose": {"x": float(motor.x), "y": float(motor.y), "theta": float(motor.theta)},
-                            "path": [[float(x), float(y)] for x, y in (planner.path or [])],
+                            "path": _active_path,
                             "trail": list(dashboard_trail), "dock": None,
-                            "goal": list(physical_mission_goal) if physical_mission_goal is not None else (
-                                list(goal) if _phase in ("DELIVER", "RETURN") and goal is not None else None),
+                            "goal": _active_goal,
                             "frontiers": _frontiers,
                         }
                     else:
