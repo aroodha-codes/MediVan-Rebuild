@@ -577,7 +577,7 @@
         dashboardDriveFailures = 0;
       } catch (err) {
         dashboardDriveFailures++;
-        if (dashboardDriveFailures >= 4) {
+        if (dashboardDriveFailures >= 8) {
           dashboardDriveDirection = null;
           if (dashboardDriveTimer) { clearInterval(dashboardDriveTimer); dashboardDriveTimer = null; }
           toast('bad', 'Manual drive stopped', err.message || String(err));
@@ -630,7 +630,7 @@
           if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
         }, 200);
       });
-      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(name =>
+      ['pointerup', 'pointercancel'].forEach(name =>
         btn.addEventListener(name, stopDashboardDrive));
     });
     window.addEventListener('blur', stopDashboardDrive);

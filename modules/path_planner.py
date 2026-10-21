@@ -377,11 +377,9 @@ class PathPlanner:
             ):
                 continue
 
-            # --------------------------------------------------
-            # 2. Confidence filter
-            # --------------------------------------------------
-
-            if obs.confidence < 0.45:
+            # 2. Confidence filter — raised from 0.45 → 0.65 to suppress
+            # clear-floor YOLO noise that was blocking delivery paths.
+            if obs.confidence < 0.65:
                 continue
 
             # --------------------------------------------------
@@ -398,11 +396,9 @@ class PathPlanner:
             if not self._object_in_driving_corridor(obs):
                 continue
 
-            # --------------------------------------------------
-            # 5. Distance / proximity filter: close collision hazard
-            # --------------------------------------------------
-
-            if obs.proximity < 0.65:
+            # 5. Distance / proximity filter — raised from 0.65 → 0.75 so
+            # only objects within ~50 cm block the planned path.
+            if obs.proximity < 0.75:
                 continue
 
             # --------------------------------------------------
@@ -793,12 +789,12 @@ class PathPlanner:
                     has_obstacle = bool(
                         obstacles
                         and any(
-                            o.confidence >= 0.65
+                            o.confidence >= 0.70
                             and o.action in (
                                 ObstacleAction.STOP,
                                 ObstacleAction.SLOW,
                             )
-                            and o.proximity > 0.55
+                            and o.proximity > 0.60
                             and self._object_in_driving_corridor(o)
                             for o in obstacles
                         )

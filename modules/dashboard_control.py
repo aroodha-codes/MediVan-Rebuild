@@ -20,7 +20,7 @@ _ALLOWED_COMMANDS = {
     "finish-explore", "save-map",
 }
 _ALLOWED_DIRECTIONS = {"stop", "forward", "reverse", "left", "right"}
-_MANUAL_DEADMAN_S = 1.5
+_MANUAL_DEADMAN_S = 3.5
 
 
 def _now_iso() -> str:
@@ -182,7 +182,7 @@ class DashboardCommandState:
             if direction == "stop":
                 self._set_drive_unlocked("stop")
             else:
-                timeout_s = max(0.10, min(float(timeout_s), 1.5))
+                timeout_s = max(0.10, min(float(timeout_s), 4.0))
                 self._drive_direction = direction
                 self._drive_deadline = time.monotonic() + timeout_s
 
@@ -418,8 +418,8 @@ class DashboardControlServer:
                 if path == "/api/robot/drive":
                     if not owner.writable:
                         self._send(403, {"ok": False, "error": "Dashboard-only mode is read-only"})
-                        return
                     direction = str(body.get("direction", "stop")).lower()
+                    direction_changed = (direction != getattr(owner.state, "_drive_direction", "stop"))
                     try:
                         owner.state.set_drive(direction)
                     except PermissionError as exc:
@@ -428,7 +428,8 @@ class DashboardControlServer:
                     except (ValueError, TypeError) as exc:
                         self._send(400, {"ok": False, "error": str(exc)})
                         return
-                    owner.state.add_event("info", "Manual drive command", direction)
+                    if direction_changed:
+                        owner.state.add_event("info", "Manual drive command", direction)
                     self._send(200, {"ok": True, "direction": direction,
                                      "deadman_ms": int(_MANUAL_DEADMAN_S * 1000)})
                     return

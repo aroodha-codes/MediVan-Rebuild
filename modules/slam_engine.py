@@ -325,13 +325,22 @@ class SLAMEngine:
                 self._frontier_idx = 0
                 self._frontier_fail = 0
             else:
-                # No reachable frontier: sweep in place to open new ones with full 175 PWM rotation torque.
+                # No reachable frontier yet — spin to reveal new cells with the
+                # camera, then escape forward to open unexplored space.
                 self._frontier_fail += 1
                 self._frontier_goal = None
                 self._frontier_path = []
                 turn_pwm = 175
+                # Every 6 fails: drive forward for 2 ticks to move into new area.
+                if self._frontier_fail % 6 < 2:
+                    return MotorCommand(turn_pwm, turn_pwm,
+                                        MotorDirection.FWD, MotorDirection.FWD)
+                # Alternate spin direction every 3 fails so camera sees both sides.
+                if (self._frontier_fail // 3) % 2 == 0:
+                    return MotorCommand(turn_pwm, turn_pwm,
+                                        MotorDirection.FWD, MotorDirection.REV)
                 return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.FWD, MotorDirection.REV)
+                                    MotorDirection.REV, MotorDirection.FWD)
 
         # ── advance the waypoint cursor with generous radius (18 px) ─────
         while self._frontier_idx < len(self._frontier_path):
@@ -355,8 +364,14 @@ class SLAMEngine:
             else:
                 self._frontier_fail += 1
                 turn_pwm = 175
+                if self._frontier_fail % 6 < 2:
+                    return MotorCommand(turn_pwm, turn_pwm,
+                                        MotorDirection.FWD, MotorDirection.FWD)
+                if (self._frontier_fail // 3) % 2 == 0:
+                    return MotorCommand(turn_pwm, turn_pwm,
+                                        MotorDirection.FWD, MotorDirection.REV)
                 return MotorCommand(turn_pwm, turn_pwm,
-                                    MotorDirection.FWD, MotorDirection.REV)
+                                    MotorDirection.REV, MotorDirection.FWD)
 
         # ── lookahead target (aim 2 waypoints ahead for smooth steering arcs) ──
         la_idx = min(self._frontier_idx + 2, len(self._frontier_path) - 1)
@@ -421,17 +436,38 @@ class SLAMEngine:
         return False
 
     def _cell_traversable(self, nx: int, ny: int, free_fn) -> bool:
-        """Can the VEHICLE occupy this cell without colliding with known walls?"""
+        """Can the VEHICLE occupy this cell without colliding with known walls?
+
+        On hardware the occupancy grid starts at the log-odds prior (0.0,
+        i.e. 'unknown').  The old implementation delegated to free_fn, which
+        resolves to _grid_is_free (grid < -0.3) when no ground-truth map is
+        available.  That returned False for every unknown cell, so BFS could
+        only traverse the tiny block of cells explicitly marked free around the
+        start pose — no path to any frontier was ever found, and exploration
+        collapsed to permanent in-place spinning.
+
+        Fix: a cell is traversable if it is NOT a confirmed wall (grid <= 0.5).
+        Unknown cells (grid ≈ 0.0) are treated optimistically — the robot may
+        enter them and the camera will then observe whether they're free or not.
+        The free_fn guard is kept only when a ground-truth map is available
+        (simulation) to prevent the robot walking through known-solid walls.
+        """
         res = SLAM_GRID_RESOLUTION
-        px, py = nx * res + res // 2, ny * res + res // 2
-        if not free_fn(px, py):
+        # Hard wall check on the occupancy grid — never enter confirmed walls.
+        if self.grid[ny, nx] > 0.5:
             return False
+        px, py = nx * res + res // 2, ny * res + res // 2
+        # In simulation a ground-truth map is provided; respect its walls.
+        if free_fn is not self._grid_is_free and free_fn is not None:
+            if not free_fn(px, py):
+                return False
+        # Footprint check: none of the four cardinal neighbours may be walls.
         m = VEHICLE_WIDTH_PX // 2
         for ox, oy in ((m, 0), (-m, 0), (0, m), (0, -m)):
             cx = (px + ox) // res
             cy = (py + oy) // res
             if 0 <= cx < _GW and 0 <= cy < _GH:
-                if self.grid[cy, cx] > 0.3:
+                if self.grid[cy, cx] > 0.5:
                     return False
         return True
 

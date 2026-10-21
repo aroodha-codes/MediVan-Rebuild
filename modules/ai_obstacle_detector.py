@@ -97,10 +97,14 @@ DEFAULT_MODEL_PATHS = [
 YOLO_INPUT_SIZE = 320
 
 # Minimum confidence for accepting a detection.
-MIN_CONFIDENCE = 0.35
+# Raised from 0.35 → 0.55: the lower value generated false STOP events
+# every few ticks on clear hospital floor texture, stalling exploration.
+MIN_CONFIDENCE = 0.55
 
 # Strong confidence needed for safety decisions.
-SAFETY_CONFIDENCE = 0.45
+# Raised from 0.45 → 0.70: only genuinely high-confidence detections
+# should override autonomous motion commands.
+SAFETY_CONFIDENCE = 0.70
 
 # NMS threshold.
 NMS_THRESHOLD = 0.45
@@ -427,7 +431,11 @@ class AIObstacleDetector:
 
             self.net = cv2.dnn.readNetFromONNX(model_path)
 
-            # Raspberry Pi CPU.
+            # Raspberry Pi CPU — utilize all 4 ARM Cortex-A72 cores for OpenCV DNN
+            try:
+                cv2.setNumThreads(4)
+            except Exception:
+                pass
             self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
             self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
 
@@ -554,77 +562,37 @@ class AIObstacleDetector:
         if output.shape[0] < output.shape[1]:
             output = output.T
 
-        detections = []
-
-        boxes = []
-        confidences = []
-        class_ids = []
+        if len(output) == 0 or output.shape[1] < 5:
+            return []
 
         h, w = frame.shape[:2]
 
-        for row in output:
+        # Vectorized parsing for high-speed inference on CPU / RPi:
+        # Avoid running thousands of Python-level argmax iterations.
+        scores = output[:, 4:]
+        class_ids_all = np.argmax(scores, axis=1)
+        confidences_all = scores[np.arange(len(scores)), class_ids_all]
 
-            if len(row) < 6:
-                continue
+        # Filter by MIN_CONFIDENCE and valid class count
+        valid_mask = (confidences_all >= MIN_CONFIDENCE) & (class_ids_all < len(COCO_CLASSES))
+        valid_indices = np.where(valid_mask)[0]
 
-            cx = float(row[0])
-            cy = float(row[1])
-            bw = float(row[2])
-            bh = float(row[3])
-
-            class_scores = row[4:]
-
-            if len(class_scores) == 0:
-                continue
-
-            class_id = int(np.argmax(class_scores))
-            confidence = float(class_scores[class_id])
-
-            if confidence < MIN_CONFIDENCE:
-                continue
-
-            if class_id >= len(COCO_CLASSES):
-                continue
-
-            # YOLO coordinates are based on model input size.
-            x_center = cx * scale_x
-            y_center = cy * scale_y
-            box_width = bw * scale_x
-            box_height = bh * scale_y
-
-            x = int(x_center - box_width / 2)
-            y = int(y_center - box_height / 2)
-
-            box_width = int(box_width)
-            box_height = int(box_height)
-
-            x = max(0, min(x, w - 1))
-            y = max(0, min(y, h - 1))
-
-            box_width = max(
-                1,
-                min(box_width, w - x),
-            )
-
-            box_height = max(
-                1,
-                min(box_height, h - y),
-            )
-
-            boxes.append(
-                [
-                    x,
-                    y,
-                    box_width,
-                    box_height,
-                ]
-            )
-
-            confidences.append(confidence)
-            class_ids.append(class_id)
-
-        if not boxes:
+        if len(valid_indices) == 0:
             return []
+
+        cx = output[valid_indices, 0] * scale_x
+        cy = output[valid_indices, 1] * scale_y
+        bw = output[valid_indices, 2] * scale_x
+        bh = output[valid_indices, 3] * scale_y
+
+        x = np.clip(cx - bw / 2.0, 0, w - 1).astype(int)
+        y = np.clip(cy - bh / 2.0, 0, h - 1).astype(int)
+        box_width = np.clip(bw, 1, w - x).astype(int)
+        box_height = np.clip(bh, 1, h - y).astype(int)
+
+        boxes = np.stack([x, y, box_width, box_height], axis=1).tolist()
+        confidences = confidences_all[valid_indices].astype(float).tolist()
+        class_ids = class_ids_all[valid_indices].astype(int).tolist()
 
         # NMS.
         try:

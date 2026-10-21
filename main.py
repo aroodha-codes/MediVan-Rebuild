@@ -904,8 +904,10 @@ def main() -> None:
                     running = False
 
                 elif event.type == pygame.WINDOWFOCUSLOST:
-                    motor.emergency_stop()
-                    print("[main] Window focus lost; motors emergency-stopped.")
+                    # Do not stop if controlling via web dashboard or running on real hardware.
+                    if not HARDWARE_MODE and not dashboard_armed and motor.mode == DriveMode.MANUAL:
+                        motor.emergency_stop()
+                        print("[main] Local window focus lost; motors stopped.")
                 elif event.type == pygame.KEYDOWN:
 
                     if event.key == pygame.K_q:
@@ -1474,7 +1476,10 @@ def main() -> None:
                                 f"left_pwm={motor_cmd.pwm_a} "
                                 f"right_pwm={motor_cmd.pwm_b} "
                                 f"left_dir={motor_cmd.dir_a} "
-                                f"right_dir={motor_cmd.dir_b}"
+                                f"right_dir={motor_cmd.dir_b} "
+                                f"frontiers={slam.frontier_count} "
+                                f"fails={slam._frontier_fail} "
+                                f"goal={slam._frontier_goal}"
                             )
 
                 elif HARDWARE_MODE and physical_mission_phase in ("STOP", "READY", "ARRIVED"):
@@ -1526,7 +1531,10 @@ def main() -> None:
 
                 for obs in obstacles:
 
-
+                    # Only act on high-confidence detections to suppress
+                    # false STOP events on clear hospital floor texture.
+                    if obs.confidence < 0.65:
+                        continue
 
                     if obs.action == ObstacleAction.STOP:
 
