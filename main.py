@@ -828,7 +828,7 @@ def main() -> None:
                                 print(f"[main] Map saved. Continuing in-progress delivery ({physical_mission_phase}).")
                             else:
                                 candidate = select_reachable_destination(slam, motor.x, motor.y)
-                                if candidate is not None and math.hypot(candidate[0] - motor.x, candidate[1] - motor.y) >= 15:
+                                if candidate is not None and math.hypot(candidate[0] - motor.x, candidate[1] - motor.y) >= 10:
                                     physical_mission_goal = candidate
                                     goal = candidate
                                     cost_fn, free_fn, near_wall_fn, _ = planner_callbacks(slam)

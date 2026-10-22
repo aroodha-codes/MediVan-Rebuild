@@ -66,7 +66,7 @@ def planner_callbacks(slam):
 
 
 def select_reachable_destination(slam, start_x: float, start_y: float,
-                                 min_distance_px: int = 25) -> Optional[Tuple[int, int]]:
+                                 min_distance_px: int = 12) -> Optional[Tuple[int, int]]:
     """Pick the farthest reachable known-free cell with chassis clearance."""
     grid = slam.grid
     h, w = grid.shape
