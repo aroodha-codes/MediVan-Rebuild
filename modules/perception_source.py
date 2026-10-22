@@ -377,20 +377,28 @@ class CameraPerceptionSource(PerceptionSource):
         x_start = int(w * 0.15)
         x_end = int(w * 0.85)
         ref = lab[y_start:y_end, x_start:x_end, :]
-        mu = ref.mean(axis=(0, 1))
 
-        # Balanced standard deviations: sensitive to real obstacles and walls
-        sd_L = max(float(ref[:, :, 0].std()), 18.0)
-        sd_a = max(float(ref[:, :, 1].std()), 6.0)
-        sd_b = max(float(ref[:, :, 2].std()), 6.0)
+        # Robust central tendency (median prevents outlier pixels from skewing floor model)
+        mu = np.median(ref, axis=(0, 1)).astype(np.float32)
+
+        # Balanced standard deviations: bounded so shadow/object in patch cannot blow up variance
+        raw_sd_L = float(ref[:, :, 0].std())
+        raw_sd_a = float(ref[:, :, 1].std())
+        raw_sd_b = float(ref[:, :, 2].std())
+
+        sd_L = min(30.0, max(raw_sd_L, 18.0))
+        sd_a = min(15.0, max(raw_sd_a, 6.0))
+        sd_b = min(15.0, max(raw_sd_b, 6.0))
         sd = np.array([sd_L, sd_a, sd_b], dtype=np.float32)
 
         dev = np.abs(lab.astype(np.float32) - mu) / sd
         raw_mask = np.all(dev < tol, axis=2).astype(np.uint8)
 
-        # High-contrast edge detection to catch walls and obstacle bases
+        # High-contrast edge detection to catch walls and obstacle bases;
+        # 3x3 Gaussian blur suppresses sensor shot noise without softening real edges
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 40, 110)
+        blurred_gray = cv2.GaussianBlur(gray, (3, 3), 0.8)
+        edges = cv2.Canny(blurred_gray, 40, 110)
         k_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         edge_mask = cv2.dilate(edges, k_edge)
         raw_mask[edge_mask > 0] = 0

@@ -83,8 +83,8 @@ class DashboardCommandState:
                 self._mode = "disarmed"
                 self._set_drive_unlocked("stop")
             elif name in ("finish-explore", "save-map"):
-                self._armed = False
-                self._mode = "disarmed"
+                self._armed = True
+                self._mode = "auto"
                 self._set_drive_unlocked("stop")
                 self._event_unlocked("info", "Exploration finished", "Map saved. Ready for delivery.")
             elif name == "reset":

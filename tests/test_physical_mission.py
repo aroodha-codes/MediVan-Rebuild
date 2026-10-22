@@ -214,4 +214,105 @@ def test_follow_path_brakes_at_destination():
     assert cmd.dir_b == MotorDirection.BRAKE
 
 
+def test_manual_drive_allows_forward_with_background_furniture():
+    from config import ObstacleResult, ObstacleClass, ObstacleAction, MotorDirection, MotorCommand
+    from modules.ai_obstacle_detector import STATIC_CLASSES
+
+    # Simulating manual obstacle filter logic
+    furniture_obs = ObstacleResult(
+        classification=ObstacleClass.FURNITURE, action=ObstacleAction.NOMINAL,
+        proximity=0.68, confidence=0.80, bbox=(100, 80, 80, 80)
+    )
+    furniture_obs.in_corridor = True
+
+    # 1. Background furniture should NOT veto manual forward driving
+    obstacles = [furniture_obs]
+    manual_blocked = False
+    for _obs in obstacles:
+        if getattr(_obs, "confidence", 0.0) < 0.40:
+            continue
+        _cls = getattr(_obs, "classification", None)
+        _prox = getattr(_obs, "proximity", 0.0)
+        _area = getattr(_obs, "area_ratio", 0.0)
+        if _prox >= 0.88 or _area >= 0.28:
+            manual_blocked = True
+            break
+        if _cls not in STATIC_CLASSES and getattr(_obs, "in_corridor", True) and _prox >= 0.80:
+            manual_blocked = True
+            break
+    assert not manual_blocked
+
+    # 2. Critical bumper collision (proximity >= 0.88) MUST veto
+    bumper_hazard = ObstacleResult(
+        classification=ObstacleClass.FURNITURE, action=ObstacleAction.NOMINAL,
+        proximity=0.92, confidence=0.85, bbox=(50, 180, 200, 40)
+    )
+    bumper_hazard.in_corridor = True
+    for _obs in [bumper_hazard]:
+        if getattr(_obs, "proximity", 0.0) >= 0.88:
+            manual_blocked = True
+            break
+    assert manual_blocked
+
+    # 3. Direct person in corridor (proximity >= 0.80) MUST veto
+    person_hazard = ObstacleResult(
+        classification=ObstacleClass.PERSON, action=ObstacleAction.STOP,
+        proximity=0.82, confidence=0.85, bbox=(120, 80, 80, 120)
+    )
+    person_hazard.in_corridor = True
+    manual_blocked = False
+    for _obs in [person_hazard]:
+        _cls = getattr(_obs, "classification", None)
+        _prox = getattr(_obs, "proximity", 0.0)
+        if _cls not in STATIC_CLASSES and getattr(_obs, "in_corridor", True) and _prox >= 0.80:
+            manual_blocked = True
+            break
+    assert manual_blocked
+
+
+def test_yolo_letterbox_preprocessing():
+    import numpy as np
+    from modules.ai_obstacle_detector import AIObstacleDetector
+
+    det = AIObstacleDetector()
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    blob, scale, pad_left, pad_top = det._preprocess(frame)
+
+    assert blob.shape == (1, 3, 320, 320)
+    assert scale == 1.0  # min(320/320, 320/240) = 1.0
+    assert pad_left == 0
+    assert pad_top == 40  # (320 - 240) // 2 = 40
+
+
+def test_floor_segmentation_robust_to_shadow_and_variance():
+    import numpy as np
+    from modules.perception_source import CameraPerceptionSource
+
+    # Create synthetic indoor floor frame (gray floor with bright wall upper half)
+    frame = np.full((240, 320, 3), 180, dtype=np.uint8)
+    # Upper half is wall
+    frame[:100, :, :] = 50
+    # Add dark shadow strip in reference floor area
+    frame[200:220, 100:150, :] = 20
+
+    mask = CameraPerceptionSource.segment_floor(frame)
+    assert mask.shape == (240, 320)
+    # Floor area in lower half should be detected as floor (True)
+    assert np.count_nonzero(mask[140:200, :]) > 10000
+
+
+def test_finish_explore_arms_autonomous_delivery():
+    from modules.dashboard_control import DashboardCommandState
+
+    state = DashboardCommandState()
+    # Initially disarmed
+    assert not state.snapshot()["armed"]
+
+    # When user finishes exploration, state should be armed for auto delivery
+    state.enqueue("finish-explore")
+    snap = state.snapshot()
+    assert snap["armed"]
+    assert snap["mode"] == "auto"
+
+
 

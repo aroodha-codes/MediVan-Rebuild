@@ -126,13 +126,13 @@ WIDE_CORRIDOR_RIGHT = 0.80
 # Calibrated for reliable physical prototype obstacle detection:
 # - At proximity >= 0.48 (within ~1.2m), robot smoothly slows down
 # - At proximity >= 0.65 (within ~60cm), robot safely stops
-SLOW_PROXIMITY = 0.48
-STOP_PROXIMITY = 0.65
+SLOW_PROXIMITY = 0.52
+STOP_PROXIMITY = 0.72
 
 # Bounding-box area thresholds.
 MIN_OBJECT_AREA = 0.005
-STOP_AREA_RATIO = 0.12
-SLOW_AREA_RATIO = 0.05
+STOP_AREA_RATIO = 0.18
+SLOW_AREA_RATIO = 0.08
 
 # Temporal confirmation.
 #
@@ -502,22 +502,41 @@ class AIObstacleDetector:
     def _preprocess(
         self,
         frame: np.ndarray,
-    ) -> Tuple[np.ndarray, float, float]:
+    ) -> Tuple[np.ndarray, float, int, int]:
 
         h, w = frame.shape[:2]
+        target = self.input_size
+
+        scale = min(target / float(w), target / float(h))
+        nw = int(round(w * scale))
+        nh = int(round(h * scale))
+
+        if nw != w or nh != h:
+            resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        else:
+            resized = frame
+
+        pad_w = target - nw
+        pad_h = target - nh
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+
+        padded = cv2.copyMakeBorder(
+            resized, pad_top, pad_bottom, pad_left, pad_right,
+            cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        )
 
         blob = cv2.dnn.blobFromImage(
-            frame,
+            padded,
             scalefactor=1.0 / 255.0,
-            size=(self.input_size, self.input_size),
+            size=(target, target),
             swapRB=True,
             crop=False,
         )
 
-        scale_x = w / float(self.input_size)
-        scale_y = h / float(self.input_size)
-
-        return blob, scale_x, scale_y
+        return blob, scale, pad_left, pad_top
 
     # ========================================================
     # YOLO DETECTION
@@ -531,7 +550,7 @@ class AIObstacleDetector:
         if self.net is None:
             return []
 
-        blob, scale_x, scale_y = self._preprocess(frame)
+        blob, scale, pad_left, pad_top = self._preprocess(frame)
 
         try:
 
@@ -581,10 +600,10 @@ class AIObstacleDetector:
         if len(valid_indices) == 0:
             return []
 
-        cx = output[valid_indices, 0] * scale_x
-        cy = output[valid_indices, 1] * scale_y
-        bw = output[valid_indices, 2] * scale_x
-        bh = output[valid_indices, 3] * scale_y
+        cx = (output[valid_indices, 0] - pad_left) / scale
+        cy = (output[valid_indices, 1] - pad_top) / scale
+        bw = output[valid_indices, 2] / scale
+        bh = output[valid_indices, 3] / scale
 
         x = np.clip(cx - bw / 2.0, 0, w - 1).astype(int)
         y = np.clip(cy - bh / 2.0, 0, h - 1).astype(int)
@@ -880,8 +899,8 @@ class AIObstacleDetector:
 
         if action == ObstacleAction.STOP:
 
-            # Immediate emergency zero-latency stop when hazard is close (< 45cm)
-            if proximity >= 0.68 or area_ratio >= 0.13:
+            # Immediate emergency zero-latency stop when hazard is close (< 35cm)
+            if proximity >= 0.78 or area_ratio >= 0.18:
                 return ObstacleAction.STOP
 
             key = self._object_key(
@@ -1176,6 +1195,15 @@ class AIObstacleDetector:
 
         if not (self.model_loaded and self.net is not None):
             self.last_detection_time = time.time()
+
+        # Structured diagnostic logging on active detections or periodic heartbeat
+        if obstacles and (self.frame_count % 30 == 0 or any(getattr(o, "action", ObstacleAction.NOMINAL) != ObstacleAction.NOMINAL for o in obstacles)):
+            summary = [
+                f"{getattr(o, 'label', getattr(o.classification, 'name', 'obj'))}"
+                f"(conf={o.confidence:.2f}, prox={o.proximity:.2f}, corridor={getattr(o, 'in_corridor', True)}, act={getattr(o.action, 'name', str(o.action))})"
+                for o in obstacles
+            ]
+            print(f"[AI Perception] Frame #{self.frame_count}: {len(obstacles)} detection(s) -> {', '.join(summary)}")
 
         return obstacles
 

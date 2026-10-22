@@ -1248,11 +1248,22 @@ def main() -> None:
                             f"cov={slam.coverage*100:.1f}%"
                         )
 
-                    if slam.mapping_complete and (not HARDWARE_MODE or
-                                                  (dashboard_armed and motor.mode == DriveMode.AUTONOMOUS)):
+                    if slam.mapping_complete:
 
                         if HARDWARE_MODE and physical_mission_phase in ("EXPLORE", "READY"):
                             slam.save_map()
+                            if motor.mode != DriveMode.AUTONOMOUS:
+                                motor.mode = DriveMode.AUTONOMOUS
+                                dashboard_armed = True
+                                dashboard_control_state._mode = "auto"
+                                dashboard_control_state._armed = True
+                                if hasattr(motor, "release_emergency"):
+                                    motor.release_emergency()
+                                print(f"[main] Mapping complete ({slam.coverage*100:.1f}%) during manual drive -> transitioning to autonomous delivery.")
+                                dashboard_control_state.add_event(
+                                    "success", "SLAM Exploration Complete",
+                                    f"Coverage achieved: {slam.coverage*100:.1f}%. Starting autonomous delivery!"
+                                )
                             if dashboard_active_mission_id is None:
                                 # Auto-dispatch autonomous delivery upon completing exploration
                                 auto_rec = dashboard_control_state.enqueue(
@@ -1551,10 +1562,12 @@ def main() -> None:
 
             if motor.mode == DriveMode.AUTONOMOUS:
 
+                from modules.ai_obstacle_detector import STATIC_CLASSES
+
                 worst_action = ObstacleAction.NOMINAL
                 closest_proximity = 0.0
                 closest_area = 0.0
-                hazard_label = ""
+                hazard_label = "none"
 
                 for obs in obstacles:
 
@@ -1562,23 +1575,36 @@ def main() -> None:
                     if getattr(obs, "confidence", 0.0) < 0.40:
                         continue
 
+                    # Static obstacles (furniture, equipment) are integrated into SLAM occupancy grid
+                    # rather than triggering dynamic emergency stops
+                    cls = getattr(obs, "classification", None)
+                    if cls in STATIC_CLASSES:
+                        continue
+
+                    # Only consider hazards in the camera driving corridor
+                    if not getattr(obs, "in_corridor", True):
+                        continue
+
                     prox = getattr(obs, "proximity", 0.0)
                     area = getattr(obs, "area_ratio", 0.0)
-                    if prox > closest_proximity:
-                        closest_proximity = prox
-                        hazard_label = str(getattr(obs, "classification", "hazard"))
-                    if area > closest_area:
-                        closest_area = area
+                    act = getattr(obs, "action", ObstacleAction.NOMINAL)
 
-                    if getattr(obs, "action", None) == ObstacleAction.STOP:
+                    if act == ObstacleAction.STOP or prox >= 0.78 or area >= 0.18:
                         worst_action = ObstacleAction.STOP
+                        closest_proximity = max(closest_proximity, prox)
+                        closest_area = max(closest_area, area)
+                        hazard_label = str(getattr(obs, "classification", "hazard"))
                         break
 
-                    elif getattr(obs, "action", None) == ObstacleAction.SLOW:
-                        worst_action = ObstacleAction.SLOW
+                    elif act == ObstacleAction.SLOW or prox >= 0.52:
+                        if worst_action != ObstacleAction.STOP:
+                            worst_action = ObstacleAction.SLOW
+                            closest_proximity = max(closest_proximity, prox)
+                            closest_area = max(closest_area, area)
+                            hazard_label = str(getattr(obs, "classification", "hazard"))
 
-                # Immediate emergency stop on STOP action or close bumper hazard (proximity >= 0.68)
-                if worst_action == ObstacleAction.STOP or closest_proximity >= 0.68 or closest_area >= 0.13:
+                # Immediate emergency stop on STOP action or close dynamic bumper hazard (proximity >= 0.78)
+                if worst_action == ObstacleAction.STOP or closest_proximity >= 0.78 or closest_area >= 0.18:
 
                     from config import MotorDirection
 
@@ -1591,7 +1617,7 @@ def main() -> None:
                     )
                     audio.play(AudioEvent.OBSTACLE_WARNING)
                     if persistent_obstacle_stop_ticks % 15 == 1:
-                        print(f"[AI SAFETY] STOP: hazard={hazard_label} prox={closest_proximity:.2f} area={closest_area:.2f}")
+                        print(f"[AI SAFETY] STOP: dynamic hazard={hazard_label} prox={closest_proximity:.2f} area={closest_area:.2f}")
 
                     # Abandon blocked frontier or replan delivery path if an obstacle blocks continuously
                     if persistent_obstacle_stop_ticks > 25:
@@ -1621,20 +1647,6 @@ def main() -> None:
                 else:
                     persistent_obstacle_stop_ticks = 0
 
-            elif motor.mode == DriveMode.MANUAL:
-                from config import MotorDirection
-                # If obstacle is immediately in front (< 45cm), veto forward manual drive
-                for obs in obstacles:
-                    if getattr(obs, "confidence", 0.0) >= 0.40 and (getattr(obs, "proximity", 0.0) >= 0.68 or getattr(obs, "area_ratio", 0.0) >= 0.13):
-                        if motor_cmd.dir_a == MotorDirection.FWD or motor_cmd.dir_b == MotorDirection.FWD:
-                            motor_cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
-                            audio.play(AudioEvent.OBSTACLE_WARNING)
-                            break
-
-
-
-
-
             # Vibration cap
 
             motor_cmd.pwm_a = min(motor_cmd.pwm_a, vib_pwm_cap)
@@ -1651,21 +1663,47 @@ def main() -> None:
 
             try:
 
-                # >>> MEDIVAN DASHBOARD MOTOR GUARD (managed)
-                # This is the final command selection before the single motor write.
-                # Therefore a dashboard manual command cannot be overwritten by the
-                # planner's earlier SLAM exploration command in this loop iteration.
+                # >>> MEDIVAN DASHBOARD & MANUAL MOTOR GUARD (managed)
                 _dashboard_override, _effective_drive = resolve_dashboard_motor_command(
                     dashboard_control_state,
                     hardware_mode=HARDWARE_MODE,
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=175,
+                    pwm=185,
                 )
-                if _dashboard_override is not None:
-                    motor_cmd = _dashboard_override
-                dashboard_manual_blocked_last = False
+                if motor.mode == DriveMode.MANUAL:
+                    from config import MotorDirection
+                    # Prioritize active dashboard command; if idle/stop, check keyboard input
+                    if _dashboard_override is not None and (_dashboard_override.dir_a != MotorDirection.BRAKE or _dashboard_override.dir_b != MotorDirection.BRAKE):
+                        motor_cmd = _dashboard_override
+                    elif 'manual_cmd' in locals() and manual_cmd is not None and (manual_cmd.dir_a != MotorDirection.BRAKE or manual_cmd.dir_b != MotorDirection.BRAKE):
+                        motor_cmd = manual_cmd
+                    elif _dashboard_override is not None:
+                        motor_cmd = _dashboard_override
+
+                    # Manual obstacle safety veto (only for critical bumper collision prox >= 0.88 or direct person)
+                    from modules.ai_obstacle_detector import STATIC_CLASSES
+                    manual_blocked = False
+                    for _obs in (obstacles or []):
+                        if getattr(_obs, "confidence", 0.0) < 0.40:
+                            continue
+                        _cls = getattr(_obs, "classification", None)
+                        _prox = getattr(_obs, "proximity", 0.0)
+                        _area = getattr(_obs, "area_ratio", 0.0)
+                        if _prox >= 0.88 or _area >= 0.28:
+                            manual_blocked = True
+                            break
+                        if _cls not in STATIC_CLASSES and getattr(_obs, "in_corridor", True) and _prox >= 0.80:
+                            manual_blocked = True
+                            break
+
+                    if manual_blocked and (motor_cmd.dir_a == MotorDirection.FWD or motor_cmd.dir_b == MotorDirection.FWD):
+                        motor_cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
+                        dashboard_manual_blocked_last = True
+                        audio.play(AudioEvent.OBSTACLE_WARNING)
+                    else:
+                        dashboard_manual_blocked_last = False
                 # <<< MEDIVAN DASHBOARD MOTOR GUARD (managed)
 
                 motor.set_pwm(motor_cmd)
