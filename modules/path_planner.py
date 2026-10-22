@@ -94,6 +94,9 @@ class PathPlanner:
         # Destination arrival & steering hysteresis tracking
         self._arrived: bool = False
         self._pivoting: bool = False
+        self._pivot_direction: Optional[str] = None
+        self._pivot_start_time: float = 0.0
+        self._prev_vfh_heading: Optional[float] = None
         self._last_vx: Optional[float] = None
         self._last_vy: Optional[float] = None
 
@@ -223,14 +226,16 @@ class PathPlanner:
             (c[0] * step + step // 2, c[1] * step + step // 2)
             for c in path_cells
         ]
+        if self.path:
+            self.path[-1] = (int(goal[0]), int(goal[1]))
 
         self.path_index = 0
         self._arrived = False
         self._pivoting = False
+        self._pivot_direction = None
+        self._prev_vfh_heading = None
         self.replan_count += 1
         print(f"[Planner] Path planned: {len(self.path)} waypoints")
-        return self.path
-
         return self.path
 
     # ==========================================================
@@ -570,6 +575,7 @@ class PathPlanner:
 
         if not target_blocked:
             speed_factor = 1.0 if pod[target_sec] < 0.25 else 0.85
+            self._prev_vfh_heading = target_heading
             return target_heading, speed_factor
 
         # 3. Path is obstructed: Find free valleys in forward semicircle
@@ -584,17 +590,24 @@ class PathPlanner:
         if not valleys:
             # If all forward sectors are dense, check if target direction is still relatively clear
             if pod[target_sec] < threshold * 1.5:
+                self._prev_vfh_heading = target_heading
                 return target_heading, 0.45
             return target_heading, 0.0
 
-        # 4. Choose valley with minimum deviation from target heading and current orientation
+        # 4. Choose valley with minimum deviation from target heading, current orientation,
+        # and previous chosen heading (temporal hysteresis to eliminate valley hunting / ping-pong).
+        prev_h = getattr(self, "_prev_vfh_heading", None)
         def valley_cost(item):
             sec, sec_h = item
             target_err = abs(math.atan2(math.sin(sec_h - target_heading), math.cos(sec_h - target_heading)))
             steer_effort = abs(math.atan2(math.sin(sec_h - vtheta), math.cos(sec_h - vtheta)))
-            return target_err + 0.35 * steer_effort
+            hist_cost = 0.0
+            if prev_h is not None:
+                hist_cost = abs(math.atan2(math.sin(sec_h - prev_h), math.cos(sec_h - prev_h)))
+            return target_err + 0.35 * steer_effort + 0.50 * hist_cost
 
         best_sec, best_heading = min(valleys, key=valley_cost)
+        self._prev_vfh_heading = best_heading
         return best_heading, 0.70
 
     # ==========================================================
@@ -625,6 +638,13 @@ class PathPlanner:
                 MotorDirection.BRAKE,
             )
 
+        # Reset steering states when path changes
+        if getattr(self, "_active_path", None) is not self.path:
+            self._active_path = self.path
+            self._pivoting = False
+            self._pivot_direction = None
+            self._prev_vfh_heading = None
+
         vx = vehicle_state.x
         vy = vehicle_state.y
         vtheta = vehicle_state.theta
@@ -635,27 +655,26 @@ class PathPlanner:
         # Advance path index
         # ------------------------------------------------------
 
-        while (
-            self.path_index
-            < len(self.path) - 1
-        ):
+        while self.path_index < len(self.path) - 1:
+            wx, wy = self.path[self.path_index]
+            distance = math.hypot(vx - wx, vy - wy)
 
-            wx, wy = self.path[
-                self.path_index
-            ]
-
-            distance = math.sqrt(
-                (vx - wx) ** 2
-                + (vy - wy) ** 2
-            )
-
+            # 1. Close enough to intermediate waypoint
             if distance < LOOKAHEAD_DIST_PX:
-
                 self.path_index += 1
+                continue
 
-            else:
-
-                break
+            # 2. Segment progress check: has vehicle progressed along segment toward next waypoint?
+            nx, ny = self.path[self.path_index + 1]
+            seg_dx = nx - wx
+            seg_dy = ny - wy
+            seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy
+            if seg_len_sq > 0:
+                proj = ((vx - wx) * seg_dx + (vy - wy) * seg_dy) / seg_len_sq
+                if proj >= 0.80:
+                    self.path_index += 1
+                    continue
+            break
 
         # ------------------------------------------------------
         # Lookahead waypoint & VFH+ local steering
@@ -967,31 +986,43 @@ class PathPlanner:
             dest_x, dest_y = self.path[-1]
             if math.hypot(vx - dest_x, vy - dest_y) <= LOOKAHEAD_DIST_PX:
                 self._arrived = True
+                self._pivoting = False
+                self._pivot_direction = None
                 return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
             else:
                 self._arrived = False
 
         # ======================================================
-        # FINAL MOTOR PWM (Pivot vs Forward differential drive)
+        # FINAL MOTOR PWM (Direction-Latched Pivot vs Forward differential drive)
         # ======================================================
 
-        # Large heading error: pivot in place towards the waypoint with wide hysteresis
+        # Large heading error: pivot in place towards the waypoint with wide hysteresis.
         # Enter pivot only if target is > 72 deg (1.25 rad) away.
-        # Exit pivot and engage forward curved drive as soon as within 40 deg (0.70 rad).
-        if abs(angle_to_la) > 1.25:
-            self._pivoting = True
-        elif abs(angle_to_la) < 0.70:
-            self._pivoting = False
+        # Once pivoting, LATCH the direction ('right' or 'left') until aligned (< 30 deg / 0.52 rad)
+        # or timeout (2.0s). This prevents limit-cycle ping-pong oscillation near +/- 180 deg!
+        now = time.time()
+        if not self._pivoting:
+            if abs(angle_to_la) > 1.25:
+                self._pivoting = True
+                self._pivot_direction = 'right' if angle_to_la > 0 else 'left'
+                self._pivot_start_time = now
+        else:
+            # If target error has genuinely crossed through zero to opposite side and is not near 180 deg
+            if (self._pivot_direction == 'right' and angle_to_la < -0.52 and abs(angle_to_la) < 2.5) or \
+               (self._pivot_direction == 'left' and angle_to_la > 0.52 and abs(angle_to_la) < 2.5):
+                self._pivot_direction = 'right' if angle_to_la > 0 else 'left'
+                self._pivot_start_time = now
 
-        if self._pivoting:
+            if abs(angle_to_la) < 0.52 or (now - self._pivot_start_time) > 2.0:
+                self._pivoting = False
+                self._pivot_direction = None
+
+        if self._pivoting and self._pivot_direction is not None:
             err_mag = abs(angle_to_la)
-            # Ensure sufficient torque without violent inertial overshoot
-            turn_pwm = int(max(175, min(190, 165 + err_mag * 15)))
-            if angle_to_la > 0:
-                # Target is to the right (desired > theta): pivot right
+            turn_pwm = int(max(170, min(188, 165 + err_mag * 12)))
+            if self._pivot_direction == 'right':
                 return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
-            # Target is to the left (desired < theta): pivot left
             return MotorCommand(turn_pwm, turn_pwm,
                                 MotorDirection.REV, MotorDirection.FWD)
 

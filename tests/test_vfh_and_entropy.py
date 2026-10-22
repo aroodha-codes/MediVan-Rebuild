@@ -95,3 +95,60 @@ def test_vfh_plus_stops_when_completely_blocked():
         obstacles=[]
     )
     assert speed_factor == 0.0
+
+
+def test_vfh_plus_temporal_hysteresis_eliminates_valley_hunting():
+    """Verify VFH+ commits to previously chosen valley to prevent left/right oscillation."""
+    planner = PathPlanner()
+
+    # Create symmetric obstacle directly ahead blocking straight path
+    def symmetric_block(x, y):
+        if 420 <= x <= 440 and 290 <= y <= 310:
+            return CellType.WALL
+        return CellType.FREE
+
+    # Tick 1: evaluate valleys
+    heading_1, _ = planner.compute_vfh_plus_steering(
+        vx=400.0, vy=300.0, vtheta=0.0,
+        target_x=470.0, target_y=300.0,
+        grid_fn=symmetric_block,
+        obstacles=[]
+    )
+    assert planner._prev_vfh_heading is not None
+
+    # Tick 2: small noise in heading should not cause it to flip to the opposite side
+    heading_2, _ = planner.compute_vfh_plus_steering(
+        vx=400.0, vy=300.0, vtheta=0.02,  # slight heading perturbation
+        target_x=470.0, target_y=300.0,
+        grid_fn=symmetric_block,
+        obstacles=[]
+    )
+    # The sign of the chosen valley heading must remain identical (no flipping)
+    assert (heading_1 > 0) == (heading_2 > 0)
+    assert abs(heading_1 - heading_2) < 0.15
+
+
+def test_path_planner_pivot_latch_prevents_180_degree_ping_pong():
+    """Verify pivot direction is latched when heading error wraps around +/- 180 degrees."""
+    planner = PathPlanner()
+    # Waypoint directly West at (300, 300)
+    planner.path = [(400, 300), (300, 300)]
+    planner.path_index = 0
+
+    # Robot at (400, 300) facing almost East (theta = 0.01 rad). Target is at +179.4 deg (angle_to_la > 0).
+    state_turnaround = VehicleState(x=400.0, y=300.0, theta=0.01)
+    cmd_1 = planner.follow_path(state_turnaround)
+    assert planner._pivoting is True
+    assert planner._pivot_direction == "right"
+    assert cmd_1.dir_a == MotorDirection.FWD
+    assert cmd_1.dir_b == MotorDirection.REV
+
+    # On next tick, small heading change or noise causes target relative angle to cross -179.4 deg (angle_to_la < 0).
+    # Robot is still pivoting turnaround; direction MUST remain locked to "right" (not flip to "left").
+    state_turnaround_wrap = VehicleState(x=400.0, y=300.0, theta=-0.01)
+    cmd_2 = planner.follow_path(state_turnaround_wrap)
+    assert planner._pivoting is True
+    assert planner._pivot_direction == "right"
+    # Motors must NOT reverse directions
+    assert cmd_2.dir_a == MotorDirection.FWD
+    assert cmd_2.dir_b == MotorDirection.REV

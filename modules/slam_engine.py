@@ -64,6 +64,8 @@ class SLAMEngine:
         self._frontier_fail = 0
         self._no_frontier_streak = 0
         self._pivoting = False
+        self._pivot_direction: Optional[str] = None
+        self._pivot_start_time: float = 0.0
         self._goal_ticks = 0
         self._goal_start_pos = (0.0, 0.0)
         self._blacklist: set[Tuple[int, int]] = set()
@@ -350,21 +352,38 @@ class SLAMEngine:
                 self._frontier_fail = 0
                 self._goal_ticks = 0
                 self._goal_start_pos = (robot_x, robot_y)
+                self._pivoting = False
+                self._pivot_direction = None
             else:
                 return self._fallback_explore_step(gx, gy, robot_theta, free_fn)
 
         # ── advance the waypoint cursor ─────────────────────────────────
-        # Use 1.25 cells for intermediate waypoints and 0.75 cells for the final
-        # frontier cell so the vehicle actually enters the frontier cell.
-        while self._frontier_idx < len(self._frontier_path):
+        while self._frontier_idx < len(self._frontier_path) - 1:
             wx, wy = self._frontier_path[self._frontier_idx]
             px, py = wx * res + res // 2, wy * res + res // 2
-            is_last = (self._frontier_idx == len(self._frontier_path) - 1)
-            reach_radius = res * 0.75 if is_last else res * 1.25
-            if math.hypot(px - robot_x, py - robot_y) < reach_radius:
+            dist = math.hypot(px - robot_x, py - robot_y)
+            if dist < res * 1.5:  # 15 px (1.5 cells)
                 self._frontier_idx += 1
-            else:
-                break
+                continue
+
+            nx, ny = self._frontier_path[self._frontier_idx + 1]
+            npx, npy = nx * res + res // 2, ny * res + res // 2
+            seg_dx = npx - px
+            seg_dy = npy - py
+            seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy
+            if seg_len_sq > 0:
+                proj = ((robot_x - px) * seg_dx + (robot_y - py) * seg_dy) / seg_len_sq
+                if proj >= 0.60:
+                    self._frontier_idx += 1
+                    continue
+            break
+
+        # Check final waypoint
+        if self._frontier_idx == len(self._frontier_path) - 1:
+            wx, wy = self._frontier_path[-1]
+            px, py = wx * res + res // 2, wy * res + res // 2
+            if math.hypot(px - robot_x, py - robot_y) < res * 1.0:
+                self._frontier_idx += 1
 
         # If reached end of current frontier path, select next frontier immediately
         if self._frontier_idx >= len(self._frontier_path):
@@ -378,6 +397,8 @@ class SLAMEngine:
                 self._frontier_fail = 0
                 self._goal_ticks = 0
                 self._goal_start_pos = (robot_x, robot_y)
+                self._pivoting = False
+                self._pivot_direction = None
             else:
                 return self._fallback_explore_step(gx, gy, robot_theta, free_fn)
 
@@ -386,22 +407,32 @@ class SLAMEngine:
         wx, wy = self._frontier_path[la_idx]
         tx, ty = wx * res + res // 2, wy * res + res // 2
 
-        # ── proportional heading control with wide hysteresis to prevent hunting ──
+        # ── direction-latched pivoting with wide hysteresis to prevent hunting ──
         desired = math.atan2(ty - robot_y, tx - robot_x)
         err = math.atan2(math.sin(desired - robot_theta),
                          math.cos(desired - robot_theta))
 
-        # Enter in-place pivot only when target is > 72 deg (1.25 rad) away.
-        # Exit pivot and engage forward curved drive as soon as within 40 deg (0.70 rad).
-        if abs(err) > 1.25:
-            self._pivoting = True
-        elif abs(err) < 0.70:
-            self._pivoting = False
+        now = time.time()
+        if not self._pivoting:
+            if abs(err) > 1.25:
+                self._pivoting = True
+                self._pivot_direction = 'right' if err > 0 else 'left'
+                self._pivot_start_time = now
+        else:
+            # If target error has genuinely crossed through zero to opposite side and is not near 180 deg
+            if (self._pivot_direction == 'right' and err < -0.52 and abs(err) < 2.5) or \
+               (self._pivot_direction == 'left' and err > 0.52 and abs(err) < 2.5):
+                self._pivot_direction = 'right' if err > 0 else 'left'
+                self._pivot_start_time = now
 
-        if self._pivoting:
+            if abs(err) < 0.52 or (now - self._pivot_start_time) > 2.0:
+                self._pivoting = False
+                self._pivot_direction = None
+
+        if self._pivoting and self._pivot_direction is not None:
             err_mag = abs(err)
-            turn_pwm = int(max(175, min(190, 165 + err_mag * 15)))
-            if err > 0:
+            turn_pwm = int(max(170, min(188, 165 + err_mag * 12)))
+            if self._pivot_direction == 'right':
                 # Target is to the right (clockwise): left wheel FWD, right wheel REV
                 return MotorCommand(turn_pwm, turn_pwm,
                                     MotorDirection.FWD, MotorDirection.REV)
@@ -665,8 +696,9 @@ class SLAMEngine:
             # Suppress ultra-close frontiers under our wheels when deeper frontiers exist
             if d < 3:
                 u *= 0.15
-            if self._frontier_goal is not None and cell == self._frontier_goal:
-                u *= FRONTIER_HYSTERESIS      # commit to the current target
+            if self._frontier_goal is not None:
+                if cell == self._frontier_goal or math.hypot(cell[0] - self._frontier_goal[0], cell[1] - self._frontier_goal[1]) <= 2.5:
+                    u *= FRONTIER_HYSTERESIS      # commit to current target cluster
             if u > best_u:
                 best_u, best = u, cell
 
