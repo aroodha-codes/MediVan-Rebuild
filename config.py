@@ -680,6 +680,10 @@ class DockResult:
     found: bool = False
     lateral_offset: float = 0.0
     distance_px: float = 0.0
+    range_m: float = 0.0
+    bearing_rad: float = 0.0
+    yaw_rad: float = 0.0
+    marker_id: int = -1
 
 
 @dataclass

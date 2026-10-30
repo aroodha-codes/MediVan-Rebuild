@@ -309,6 +309,7 @@ def resolve_dashboard_motor_command(
     emergency_stopped: bool,
     manual_mode: bool,
     pwm: int = 45,
+    obstacle_stop: bool = False,
 ):
     """Return the hardware command override and the reported drive state.
 
@@ -325,7 +326,8 @@ def resolve_dashboard_motor_command(
         return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE), "stop (disarmed)"
     if manual_mode:
         direction = state.current_drive()
-        return build_manual_motor_command(direction, pwm=pwm, obstacle_stop=False, max_pwm=max(120, pwm)), direction
+        effective_stop = bool(obstacle_stop and direction == "forward")
+        return build_manual_motor_command(direction, pwm=pwm, obstacle_stop=effective_stop, max_pwm=max(120, pwm)), direction
     return None, "autonomous"
 
 
@@ -421,8 +423,12 @@ class DashboardControlServer:
                         self._send(403, {"ok": False, "error": "Dashboard-only mode is read-only"})
                     direction = str(body.get("direction", "stop")).lower()
                     direction_changed = (direction != getattr(owner.state, "_drive_direction", "stop"))
+                    deadman_s = body.get("timeout_s", body.get("deadman_s", None))
                     try:
-                        owner.state.set_drive(direction)
+                        if deadman_s is not None:
+                            owner.state.set_drive(direction, timeout_s=float(deadman_s))
+                        else:
+                            owner.state.set_drive(direction)
                     except PermissionError as exc:
                         self._send(409, {"ok": False, "error": str(exc)})
                         return

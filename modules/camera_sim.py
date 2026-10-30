@@ -601,12 +601,18 @@ class CameraSim:
                 cx = float(np.mean(c[:, 0]))
                 cy = float(np.mean(c[:, 1]))
                 lateral = cx - FRAME_W / 2.0
-                # Approximate distance from marker size
+                # Approximate distance and bearing from marker size
                 marker_w = float(np.linalg.norm(c[0] - c[1]))
+                approx_range_m = float((0.10 * 300.0) / max(marker_w, 1.0))
+                approx_bearing = float((lateral / (FRAME_W / 2.0)) * 0.54)
                 return DockResult(
                     found=True,
                     lateral_offset=lateral,
                     distance_px=marker_w,
+                    range_m=approx_range_m,
+                    bearing_rad=approx_bearing,
+                    yaw_rad=0.0,
+                    marker_id=int(marker_id),
                 )
 
         return DockResult(found=False)

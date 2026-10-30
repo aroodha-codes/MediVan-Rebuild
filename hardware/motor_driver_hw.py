@@ -88,6 +88,14 @@ class MotorDriverHW:
         self.wall_contact: bool = False
         self._wall_flash_end: float = 0.0
 
+        # ── Soft-start slew rate & state caching (prevents battery brownout) ──
+        self._current_speed_left: float = 0.0
+        self._current_speed_right: float = 0.0
+        self._applied_dir_a: Optional[MotorDirection] = None
+        self._applied_dir_b: Optional[MotorDirection] = None
+        self._applied_speed_left: float = -1.0
+        self._applied_speed_right: float = -1.0
+
         # Initialize physical motors.  L298N layout: (IN1, IN2, ENA)
         self._left_motor = Motor(
             forward=PIN_MOTOR_IN1,
@@ -230,23 +238,53 @@ class MotorDriverHW:
         return -speed if direction == MotorDirection.REV else speed
 
     def _apply_hardware_command(self) -> None:
-        """Translate the latched MediVan command to gpiozero calls."""
-        speed_left = min(1.0, max(0.0, self.pwm_a / 255.0))
-        speed_right = min(1.0, max(0.0, self.pwm_b / 255.0))
+        """Translate the latched MediVan command to gpiozero calls with soft-start slew."""
+        target_speed_left = min(1.0, max(0.0, self.pwm_a / 255.0))
+        target_speed_right = min(1.0, max(0.0, self.pwm_b / 255.0))
 
-        if self.dir_a == MotorDirection.FWD:
-            self._left_motor.forward(speed_left)
-        elif self.dir_a == MotorDirection.REV:
-            self._left_motor.backward(speed_left)
+        # Soft-start acceleration slew-rate limiter:
+        # Ramp up motor speed gradually (max +0.12 per tick, ~250ms to reach full speed)
+        # to prevent sudden stall inrush current spikes that cause Raspberry Pi brownout resets.
+        slew_step = 0.12
+        if self.dir_a != MotorDirection.BRAKE and not self.emergency_stopped:
+            if self._current_speed_left < target_speed_left:
+                self._current_speed_left = min(target_speed_left, self._current_speed_left + slew_step)
+            else:
+                self._current_speed_left = target_speed_left
         else:
-            self._left_motor.stop()
+            self._current_speed_left = 0.0
 
-        if self.dir_b == MotorDirection.FWD:
-            self._right_motor.forward(speed_right)
-        elif self.dir_b == MotorDirection.REV:
-            self._right_motor.backward(speed_right)
+        if self.dir_b != MotorDirection.BRAKE and not self.emergency_stopped:
+            if self._current_speed_right < target_speed_right:
+                self._current_speed_right = min(target_speed_right, self._current_speed_right + slew_step)
+            else:
+                self._current_speed_right = target_speed_right
         else:
-            self._right_motor.stop()
+            self._current_speed_right = 0.0
+
+        # Apply to gpiozero only when values change to avoid thrashing GPIO PWM daemon
+        speed_l = round(self._current_speed_left, 3)
+        speed_r = round(self._current_speed_right, 3)
+
+        if self.dir_a != self._applied_dir_a or abs(speed_l - self._applied_speed_left) > 0.02:
+            if self.dir_a == MotorDirection.FWD and speed_l > 0.01:
+                self._left_motor.forward(speed_l)
+            elif self.dir_a == MotorDirection.REV and speed_l > 0.01:
+                self._left_motor.backward(speed_l)
+            else:
+                self._left_motor.stop()
+            self._applied_dir_a = self.dir_a
+            self._applied_speed_left = speed_l
+
+        if self.dir_b != self._applied_dir_b or abs(speed_r - self._applied_speed_right) > 0.02:
+            if self.dir_b == MotorDirection.FWD and speed_r > 0.01:
+                self._right_motor.forward(speed_r)
+            elif self.dir_b == MotorDirection.REV and speed_r > 0.01:
+                self._right_motor.backward(speed_r)
+            else:
+                self._right_motor.stop()
+            self._applied_dir_b = self.dir_b
+            self._applied_speed_right = speed_r
 
     def cleanup(self) -> None:
         """Release GPIO pins."""

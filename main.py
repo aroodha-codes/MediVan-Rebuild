@@ -358,6 +358,15 @@ def main() -> None:
 
         print("[main] HARDWARE_MODE=True. Loading physical RPi drivers...")
 
+        # Ensure Raspberry Pi WiFi power-saving mode is OFF to prevent SSH & dashboard drops
+        try:
+            import subprocess
+            subprocess.run(["sudo", "iw", "dev", "wlan0", "set", "power_save", "off"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            print("[Hardware] WiFi power management: power_save OFF on wlan0.")
+        except Exception:
+            pass
+
         from hardware.motor_driver_hw import MotorDriverHW
 
         from hardware.camera_hw import CameraHW
@@ -1156,6 +1165,30 @@ def main() -> None:
                             "info", "Visual Loop Closure",
                             f"Matched KeyFrame #{vis_result.loop_keyframe_id}; reset cumulative odometry drift."
                         )
+
+                # Metric Scale Recovery & Absolute Pose Anchoring from ArUco Fiducials
+                if dock_result is not None and getattr(dock_result, "found", False) and getattr(dock_result, "range_m", 0.0) > 0.05:
+                    dock_gx = float(map_loader.dock_position[0]) if map_loader and map_loader.dock_position else float(motor.x)
+                    dock_gy = float(map_loader.dock_position[1]) if map_loader and map_loader.dock_position else float(motor.y)
+                    aruco_snapped = localizer.update_aruco_landmark(
+                        landmark_x=dock_gx,
+                        landmark_y=dock_gy,
+                        range_m=float(dock_result.range_m),
+                        bearing_rad=float(dock_result.bearing_rad),
+                        marker_yaw_rad=float(getattr(dock_result, "yaw_rad", 0.0)),
+                    )
+                    if aruco_snapped:
+                        vehicle_state = localizer.get_state()
+                        if slam is not None and getattr(slam, "_particles_initialized", False):
+                            p_mean_x = float(np.mean(slam.particles[:, 0]))
+                            p_mean_y = float(np.mean(slam.particles[:, 1]))
+                            p_mean_th = float(np.mean(slam.particles[:, 2]))
+                            slam.on_loop_closure(vehicle_state.x - p_mean_x, vehicle_state.y - p_mean_y, vehicle_state.theta - p_mean_th)
+                        if dashboard_control_state is not None:
+                            dashboard_control_state.add_event(
+                                "info", "ArUco Scale Anchor",
+                                f"Fiducial #{getattr(dock_result, 'marker_id', 0)} locked at {dock_result.range_m:.2f}m. EKF scale drift eliminated."
+                            )
             except Exception:
                 vehicle_state = VehicleState(x=motor.x, y=motor.y, theta=motor.theta)
 
@@ -1670,7 +1703,7 @@ def main() -> None:
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=185,
+                    pwm=145,
                 )
                 if motor.mode == DriveMode.MANUAL:
                     from config import MotorDirection
@@ -1682,26 +1715,39 @@ def main() -> None:
                     elif _dashboard_override is not None:
                         motor_cmd = _dashboard_override
 
-                    # Manual obstacle safety veto (only for critical bumper collision prox >= 0.88 or direct person)
+                    # Manual obstacle safety veto (only veto forward drive if hazard is directly in the path)
                     from modules.ai_obstacle_detector import STATIC_CLASSES
                     manual_blocked = False
                     for _obs in (obstacles or []):
-                        if getattr(_obs, "confidence", 0.0) < 0.40:
+                        if getattr(_obs, "confidence", 0.0) < 0.45:
+                            continue
+                        _in_corr = getattr(_obs, "in_corridor", False)
+                        if not _in_corr:
                             continue
                         _cls = getattr(_obs, "classification", None)
                         _prox = getattr(_obs, "proximity", 0.0)
                         _area = getattr(_obs, "area_ratio", 0.0)
-                        if _prox >= 0.88 or _area >= 0.28:
+                        _dist_m = getattr(_obs, "distance_m", getattr(_obs, "range_m", None))
+                        if _dist_m is not None and 0.05 < _dist_m < 0.40:
                             manual_blocked = True
                             break
-                        if _cls not in STATIC_CLASSES and getattr(_obs, "in_corridor", True) and _prox >= 0.80:
+                        if _prox >= 0.90 or _area >= 0.35:
+                            manual_blocked = True
+                            break
+                        if _cls not in STATIC_CLASSES and _prox >= 0.82:
                             manual_blocked = True
                             break
 
                     if manual_blocked and (motor_cmd.dir_a == MotorDirection.FWD or motor_cmd.dir_b == MotorDirection.FWD):
                         motor_cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
-                        dashboard_manual_blocked_last = True
-                        audio.play(AudioEvent.OBSTACLE_WARNING)
+                        if not dashboard_manual_blocked_last:
+                            dashboard_manual_blocked_last = True
+                            audio.play(AudioEvent.OBSTACLE_WARNING)
+                            if dashboard_control_state is not None:
+                                dashboard_control_state.add_event(
+                                    "warning", "Active Safety Interlock",
+                                    "Forward motion halted: obstacle directly ahead (<0.40m)."
+                                )
                     else:
                         dashboard_manual_blocked_last = False
                 # <<< MEDIVAN DASHBOARD MOTOR GUARD (managed)

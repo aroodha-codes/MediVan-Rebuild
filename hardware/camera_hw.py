@@ -187,6 +187,10 @@ class CameraHW:
             found=True,
             lateral_offset=cx - FRAME_W / 2.0,
             distance_px=marker_w,
+            range_m=float(getattr(pose, "range_m", 0.0)),
+            bearing_rad=float(getattr(pose, "bearing_rad", 0.0)),
+            yaw_rad=float(getattr(pose, "yaw_rad", 0.0)),
+            marker_id=int(getattr(pose, "marker_id", 0)),
         )
 
     # ── shutdown ───────────────────────────────────────────────

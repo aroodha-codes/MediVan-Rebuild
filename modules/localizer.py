@@ -533,6 +533,67 @@ class Localizer:
         self._P = 0.5 * (self._P + self._P.T)
         self._update_public_state()
 
+    def update_aruco_landmark(
+        self,
+        landmark_x: float,
+        landmark_y: float,
+        range_m: float,
+        bearing_rad: float,
+        landmark_heading_rad: Optional[float] = None,
+        marker_yaw_rad: float = 0.0,
+        R_pos: float = 0.8,
+        R_theta: float = 0.02,
+    ) -> bool:
+        """Absolute pose measurement update from a known-location ArUco marker.
+
+        Using calibrated PnP geometry, an observed fiducial with range_m and bearing
+        gives a direct, scale-drift-free estimate of the vehicle's world pose:
+            range_px = range_m / MAP_SCALE_M_PER_PX
+            world_bearing = theta + bearing_rad
+            z_x = landmark_x - range_px * cos(world_bearing)
+            z_y = landmark_y - range_px * sin(world_bearing)
+
+        If landmark_heading_rad is provided (wall orientation normal):
+            z_theta = landmark_heading_rad + math.pi - marker_yaw_rad
+        """
+        if range_m <= 0.05 or range_m > 5.0:
+            return False
+
+        range_px = range_m / MAP_SCALE_M_PER_PX
+        cur_theta = float(self._state[2])
+        world_bearing = cur_theta + bearing_rad
+        z_x = landmark_x - range_px * math.cos(world_bearing)
+        z_y = landmark_y - range_px * math.sin(world_bearing)
+
+        if landmark_heading_rad is not None:
+            z_th = math.atan2(math.sin(landmark_heading_rad + math.pi - marker_yaw_rad),
+                              math.cos(landmark_heading_rad + math.pi - marker_yaw_rad))
+            z = np.array([z_x, z_y, z_th])
+            H = np.eye(3)
+            R = np.diag([R_pos, R_pos, R_theta])
+            innov = z - H @ self._state
+            innov[2] = math.atan2(math.sin(innov[2]), math.cos(innov[2]))
+        else:
+            z = np.array([z_x, z_y])
+            H = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+            R = np.diag([R_pos, R_pos])
+            innov = z - H @ self._state
+
+        S = H @ self._P @ H.T + R
+        try:
+            K = self._P @ H.T @ np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            return False
+
+        self._state = self._state + K @ innov
+        self._state[2] = math.atan2(math.sin(self._state[2]), math.cos(self._state[2]))
+        I_KH = np.eye(3) - K @ H
+        self._P = I_KH @ self._P @ I_KH.T + K @ R @ K.T
+        self._P = 0.5 * (self._P + self._P.T)
+        self.odometry_confidence = min(1.0, self.odometry_confidence + 0.25)
+        self._update_public_state()
+        return True
+
     def get_state(self) -> VehicleState:
         """Return current state as a VehicleState dataclass."""
         return VehicleState(

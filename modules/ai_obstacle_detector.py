@@ -1196,8 +1196,8 @@ class AIObstacleDetector:
         if not (self.model_loaded and self.net is not None):
             self.last_detection_time = time.time()
 
-        # Structured diagnostic logging on active detections or periodic heartbeat
-        if obstacles and (self.frame_count % 30 == 0 or any(getattr(o, "action", ObstacleAction.NOMINAL) != ObstacleAction.NOMINAL for o in obstacles)):
+        # Structured diagnostic logging: at most once every 30 frames (~1 sec) to prevent SSH terminal flooding
+        if self.frame_count % 30 == 0 and obstacles:
             summary = [
                 f"{getattr(o, 'label', getattr(o.classification, 'name', 'obj'))}"
                 f"(conf={o.confidence:.2f}, prox={o.proximity:.2f}, corridor={getattr(o, 'in_corridor', True)}, act={getattr(o.action, 'name', str(o.action))})"
