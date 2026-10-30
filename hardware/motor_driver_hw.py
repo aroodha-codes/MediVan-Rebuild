@@ -64,6 +64,9 @@ except ImportError:
     print("[WARNING] gpiozero not found. Running MotorDriverHW in stub mode.")
 
 
+__all__ = ["MotorDriverHW"]
+
+
 class MotorDriverHW:
     """Controls physical L298N DC gear motors on a Raspberry Pi 4."""
 
