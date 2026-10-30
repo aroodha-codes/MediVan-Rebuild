@@ -39,7 +39,7 @@ from config import (
     PIN_MOTOR_ENA, PIN_MOTOR_IN1, PIN_MOTOR_IN2,
     PIN_MOTOR_ENB, PIN_MOTOR_IN3, PIN_MOTOR_IN4,
     MAX_SPEED_MS, PWM_DEADBAND, WHEEL_BASE_M, MAP_SCALE_M_PER_PX,
-    DriveMode, MotorCommand, MotorDirection,
+    DriveMode, MotorCommand, MotorDirection, MANUAL_DRIVE_PWM,
 )
 
 try:
@@ -218,7 +218,7 @@ class MotorDriverHW:
         if keys[pygame.K_SPACE]:
             return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
 
-        pwm = 175
+        pwm = MANUAL_DRIVE_PWM
         cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
 
         if keys[pygame.K_w]:
@@ -250,9 +250,9 @@ class MotorDriverHW:
         target_speed_right = min(1.0, max(0.0, self.pwm_b / 255.0))
 
         # Soft-start acceleration slew-rate limiter:
-        # Ramp up motor speed gradually (max +0.10 per tick, ~250ms from 0 to full speed)
-        # to prevent sudden stall inrush current spikes that cause Raspberry Pi brownout resets.
-        slew_step = 0.10
+        # Ramp up motor speed rapidly (max +0.20 per tick, ~100ms from 0 to full speed)
+        # to ensure snappy, responsive driving while eliminating the instant inrush current spike.
+        slew_step = 0.20
         if self.dir_a != MotorDirection.BRAKE and not self.emergency_stopped:
             if self._current_speed_left < target_speed_left:
                 self._current_speed_left = min(target_speed_left, self._current_speed_left + slew_step)

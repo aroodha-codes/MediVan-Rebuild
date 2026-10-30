@@ -405,6 +405,7 @@ BUMP_SLOW_DIST_PX: int = 15
 JUNCTION_CLEAR_TIME_S: float = 1.0
 JUNCTION_RECHECK_TIME_S: float = 2.0
 REPLAN_DEVIATION_PX: int = 40
+MANUAL_DRIVE_PWM: int = 175                  # Brisk PWM for physical chassis manual teleoperation
 
 # ════════════════════════════════════════════════
 # AI OBSTACLE DETECTION (YOLO11-Nano / YOLOv8-Nano)

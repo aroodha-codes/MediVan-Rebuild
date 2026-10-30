@@ -277,7 +277,7 @@ def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: 
     predicate. The physical main loop intentionally does not connect generic
     YOLO bounding-box area directly to this flag: that heuristic has no reliable
     metric range and can suppress every manual direction, including retreat.
-    Manual teleoperation stays slow and operator-supervised; this is not a safety
+    Manual teleoperation stays responsive and operator-supervised; this is not a safety
     bumper or a substitute for validated ranging.
     """
     from config import MotorCommand, MotorDirection
@@ -291,10 +291,10 @@ def build_manual_motor_command(direction: str, pwm: int = 45, *, obstacle_stop: 
     if direction == "reverse":
         return MotorCommand(pwm, pwm, MotorDirection.REV, MotorDirection.REV)
     if direction == "left":
-        pwm_l = max(0, min(int(pwm * 1.25), int(max_pwm * 1.25)))
+        pwm_l = max(0, min(int(pwm * 1.25), int(max_pwm * 1.25), 255))
         return MotorCommand(pwm_l, pwm_l, MotorDirection.REV, MotorDirection.FWD)
     if direction == "right":
-        pwm_r = max(0, min(int(pwm * 1.25), int(max_pwm * 1.25)))
+        pwm_r = max(0, min(int(pwm * 1.25), int(max_pwm * 1.25), 255))
         return MotorCommand(pwm_r, pwm_r, MotorDirection.FWD, MotorDirection.REV)
     if direction == "stop":
         return MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
@@ -327,7 +327,7 @@ def resolve_dashboard_motor_command(
     if manual_mode:
         direction = state.current_drive()
         effective_stop = bool(obstacle_stop and direction == "forward")
-        return build_manual_motor_command(direction, pwm=pwm, obstacle_stop=effective_stop, max_pwm=max(120, pwm)), direction
+        return build_manual_motor_command(direction, pwm=pwm, obstacle_stop=effective_stop, max_pwm=max(220, pwm)), direction
     return None, "autonomous"
 
 

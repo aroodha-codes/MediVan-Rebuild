@@ -79,7 +79,7 @@ from config import (
 
     WINDOWS_REAL_CAMERA, WINDOWS_CAMERA_INDEX, FRAME_W, FRAME_H,
 
-    MAP_WIDTH, MAP_HEIGHT,
+    MAP_WIDTH, MAP_HEIGHT, MANUAL_DRIVE_PWM,
 
 )
 
@@ -361,9 +361,12 @@ def main() -> None:
         # Ensure Raspberry Pi WiFi power-saving mode is OFF to prevent SSH & dashboard drops
         try:
             import subprocess
-            subprocess.run(["sudo", "iw", "dev", "wlan0", "set", "power_save", "off"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-            print("[Hardware] WiFi power management: power_save OFF on wlan0.")
+            res = subprocess.run(
+                ["sudo", "-n", "iw", "dev", "wlan0", "set", "power_save", "off"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+            )
+            if res.returncode == 0:
+                print("[Hardware] WiFi power management: power_save OFF on wlan0.")
         except Exception:
             pass
 
@@ -1703,7 +1706,7 @@ def main() -> None:
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=135,
+                    pwm=MANUAL_DRIVE_PWM,
                 )
                 if motor.mode == DriveMode.MANUAL:
                     from config import MotorDirection
