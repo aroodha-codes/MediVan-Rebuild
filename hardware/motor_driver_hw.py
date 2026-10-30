@@ -43,18 +43,23 @@ from config import (
 )
 
 try:
-    # Attempt to load RPi GPIO library
-    from gpiozero import Motor
+    # Attempt to load RPi GPIO library (using 1 kHz PWM identical to test_motors_final.py)
+    from gpiozero import DigitalOutputDevice, PWMOutputDevice
     _GPIO_AVAILABLE = True
 except ImportError:
-    # Mock class for development on PC
-    class Motor:                                    # type: ignore[no-redef]
-        def __init__(self, forward, backward, enable=None, pwm=True):
-            self.pwm = pwm
-        def forward(self, speed=1.0): pass
-        def backward(self, speed=1.0): pass
-        def stop(self): pass
+    # Mock classes for development on PC
+    class DigitalOutputDevice:                     # type: ignore[no-redef]
+        def __init__(self, pin, initial_value=False): self.value = bool(initial_value)
+        def on(self): self.value = True
+        def off(self): self.value = False
         def close(self): pass
+
+    class PWMOutputDevice:                         # type: ignore[no-redef]
+        def __init__(self, pin, frequency=1000, initial_value=0):
+            self.frequency = frequency
+            self.value = float(initial_value)
+        def close(self): pass
+
     _GPIO_AVAILABLE = False
     print("[WARNING] gpiozero not found. Running MotorDriverHW in stub mode.")
 
@@ -96,22 +101,18 @@ class MotorDriverHW:
         self._applied_speed_left: float = -1.0
         self._applied_speed_right: float = -1.0
 
-        # Initialize physical motors.  L298N layout: (IN1, IN2, ENA)
-        self._left_motor = Motor(
-            forward=PIN_MOTOR_IN1,
-            backward=PIN_MOTOR_IN2,
-            enable=PIN_MOTOR_ENA,
-            pwm=True,
-        )
-        self._right_motor = Motor(
-            forward=PIN_MOTOR_IN3,
-            backward=PIN_MOTOR_IN4,
-            enable=PIN_MOTOR_ENB,
-            pwm=True,
-        )
+        # Initialize physical motor pins (1000 Hz PWM - verified in test_motors_final.py)
+        self._left_ena = PWMOutputDevice(PIN_MOTOR_ENA, frequency=1000, initial_value=0)
+        self._left_in1 = DigitalOutputDevice(PIN_MOTOR_IN1, initial_value=False)
+        self._left_in2 = DigitalOutputDevice(PIN_MOTOR_IN2, initial_value=False)
+
+        self._right_enb = PWMOutputDevice(PIN_MOTOR_ENB, frequency=1000, initial_value=0)
+        self._right_in3 = DigitalOutputDevice(PIN_MOTOR_IN3, initial_value=False)
+        self._right_in4 = DigitalOutputDevice(PIN_MOTOR_IN4, initial_value=False)
         print(
-            f"[Hardware] L298N initialized "
-            f"(ENA=GPIO{PIN_MOTOR_ENA}/PWM0, ENB=GPIO{PIN_MOTOR_ENB}/PWM1)."
+            f"[Hardware] L298N initialized at 1kHz "
+            f"(Left: ENA=GPIO{PIN_MOTOR_ENA}, IN1=GPIO{PIN_MOTOR_IN1}, IN2=GPIO{PIN_MOTOR_IN2} | "
+            f"Right: ENB=GPIO{PIN_MOTOR_ENB}, IN3=GPIO{PIN_MOTOR_IN3}, IN4=GPIO{PIN_MOTOR_IN4})."
         )
 
     # ── public API (mirrors MotorDriverSim) ─────────────────────────
@@ -174,8 +175,14 @@ class MotorDriverHW:
         self.speed_right = 0.0
         self.forward_v = 0.0
         self.angular_v = 0.0
-        self._left_motor.stop()
-        self._right_motor.stop()
+        self._current_speed_left = 0.0
+        self._current_speed_right = 0.0
+        self._left_ena.value = 0.0
+        self._left_in1.off()
+        self._left_in2.off()
+        self._right_enb.value = 0.0
+        self._right_in3.off()
+        self._right_in4.off()
 
     def release_emergency(self) -> None:
         """Clear the emergency stop flag."""
@@ -238,14 +245,14 @@ class MotorDriverHW:
         return -speed if direction == MotorDirection.REV else speed
 
     def _apply_hardware_command(self) -> None:
-        """Translate the latched MediVan command to gpiozero calls with soft-start slew."""
+        """Translate the latched MediVan command to 1kHz PWM calls with soft-start slew."""
         target_speed_left = min(1.0, max(0.0, self.pwm_a / 255.0))
         target_speed_right = min(1.0, max(0.0, self.pwm_b / 255.0))
 
         # Soft-start acceleration slew-rate limiter:
-        # Ramp up motor speed gradually (max +0.12 per tick, ~250ms to reach full speed)
+        # Ramp up motor speed gradually (max +0.10 per tick, ~250ms from 0 to full speed)
         # to prevent sudden stall inrush current spikes that cause Raspberry Pi brownout resets.
-        slew_step = 0.12
+        slew_step = 0.10
         if self.dir_a != MotorDirection.BRAKE and not self.emergency_stopped:
             if self._current_speed_left < target_speed_left:
                 self._current_speed_left = min(target_speed_left, self._current_speed_left + slew_step)
@@ -262,33 +269,48 @@ class MotorDriverHW:
         else:
             self._current_speed_right = 0.0
 
-        # Apply to gpiozero only when values change to avoid thrashing GPIO PWM daemon
         speed_l = round(self._current_speed_left, 3)
         speed_r = round(self._current_speed_right, 3)
 
-        if self.dir_a != self._applied_dir_a or abs(speed_l - self._applied_speed_left) > 0.02:
-            if self.dir_a == MotorDirection.FWD and speed_l > 0.01:
-                self._left_motor.forward(speed_l)
-            elif self.dir_a == MotorDirection.REV and speed_l > 0.01:
-                self._left_motor.backward(speed_l)
-            else:
-                self._left_motor.stop()
-            self._applied_dir_a = self.dir_a
-            self._applied_speed_left = speed_l
+        # Left motor (ENA=18, IN1=19, IN2=13)
+        if self.dir_a == MotorDirection.FWD and speed_l > 0.01:
+            self._left_in1.on()
+            self._left_in2.off()
+            self._left_ena.value = speed_l
+        elif self.dir_a == MotorDirection.REV and speed_l > 0.01:
+            self._left_in1.off()
+            self._left_in2.on()
+            self._left_ena.value = speed_l
+        else:
+            self._left_ena.value = 0.0
+            self._left_in1.off()
+            self._left_in2.off()
 
-        if self.dir_b != self._applied_dir_b or abs(speed_r - self._applied_speed_right) > 0.02:
-            if self.dir_b == MotorDirection.FWD and speed_r > 0.01:
-                self._right_motor.forward(speed_r)
-            elif self.dir_b == MotorDirection.REV and speed_r > 0.01:
-                self._right_motor.backward(speed_r)
-            else:
-                self._right_motor.stop()
-            self._applied_dir_b = self.dir_b
-            self._applied_speed_right = speed_r
+        # Right motor (ENB=12, IN3=5, IN4=6)
+        if self.dir_b == MotorDirection.FWD and speed_r > 0.01:
+            self._right_in3.on()
+            self._right_in4.off()
+            self._right_enb.value = speed_r
+        elif self.dir_b == MotorDirection.REV and speed_r > 0.01:
+            self._right_in3.off()
+            self._right_in4.on()
+            self._right_enb.value = speed_r
+        else:
+            self._right_enb.value = 0.0
+            self._right_in3.off()
+            self._right_in4.off()
 
     def cleanup(self) -> None:
         """Release GPIO pins."""
-        self._left_motor.stop()
-        self._right_motor.stop()
-        self._left_motor.close()
-        self._right_motor.close()
+        self._left_ena.value = 0.0
+        self._left_in1.off()
+        self._left_in2.off()
+        self._right_enb.value = 0.0
+        self._right_in3.off()
+        self._right_in4.off()
+        self._left_ena.close()
+        self._left_in1.close()
+        self._left_in2.close()
+        self._right_enb.close()
+        self._right_in3.close()
+        self._right_in4.close()

@@ -1703,7 +1703,7 @@ def main() -> None:
                     armed=dashboard_armed,
                     emergency_stopped=bool(motor.emergency_stopped),
                     manual_mode=(motor.mode == DriveMode.MANUAL),
-                    pwm=145,
+                    pwm=135,
                 )
                 if motor.mode == DriveMode.MANUAL:
                     from config import MotorDirection
@@ -1715,41 +1715,10 @@ def main() -> None:
                     elif _dashboard_override is not None:
                         motor_cmd = _dashboard_override
 
-                    # Manual obstacle safety veto (only veto forward drive if hazard is directly in the path)
-                    from modules.ai_obstacle_detector import STATIC_CLASSES
-                    manual_blocked = False
-                    for _obs in (obstacles or []):
-                        if getattr(_obs, "confidence", 0.0) < 0.45:
-                            continue
-                        _in_corr = getattr(_obs, "in_corridor", False)
-                        if not _in_corr:
-                            continue
-                        _cls = getattr(_obs, "classification", None)
-                        _prox = getattr(_obs, "proximity", 0.0)
-                        _area = getattr(_obs, "area_ratio", 0.0)
-                        _dist_m = getattr(_obs, "distance_m", getattr(_obs, "range_m", None))
-                        if _dist_m is not None and 0.05 < _dist_m < 0.40:
-                            manual_blocked = True
-                            break
-                        if _prox >= 0.90 or _area >= 0.35:
-                            manual_blocked = True
-                            break
-                        if _cls not in STATIC_CLASSES and _prox >= 0.82:
-                            manual_blocked = True
-                            break
-
-                    if manual_blocked and (motor_cmd.dir_a == MotorDirection.FWD or motor_cmd.dir_b == MotorDirection.FWD):
-                        motor_cmd = MotorCommand(0, 0, MotorDirection.BRAKE, MotorDirection.BRAKE)
-                        if not dashboard_manual_blocked_last:
-                            dashboard_manual_blocked_last = True
-                            audio.play(AudioEvent.OBSTACLE_WARNING)
-                            if dashboard_control_state is not None:
-                                dashboard_control_state.add_event(
-                                    "warning", "Active Safety Interlock",
-                                    "Forward motion halted: obstacle directly ahead (<0.40m)."
-                                )
-                    else:
-                        dashboard_manual_blocked_last = False
+                    # In Manual mode, operator has authoritative teleoperation control.
+                    # Obstacle detection provides visual bounding boxes and telemetry,
+                    # but does NOT veto or cut motor power.
+                    dashboard_manual_blocked_last = False
                 # <<< MEDIVAN DASHBOARD MOTOR GUARD (managed)
 
                 motor.set_pwm(motor_cmd)
