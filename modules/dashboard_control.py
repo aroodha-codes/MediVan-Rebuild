@@ -98,7 +98,8 @@ class DashboardCommandState:
                     raise PermissionError("Emergency stop is latched. Send Re-arm first, then enable Manual driving.")
                 self._armed = True
                 self._mode = "manual"
-                self._set_drive_unlocked("stop")
+                if self._drive_direction == "stop":
+                    self._set_drive_unlocked("stop")
             elif name in ("start", "explore", "resume", "dock"):
                 if self._estop_latched:
                     raise PermissionError("Emergency stop is latched. Send Re-arm first, then choose Start or Manual.")

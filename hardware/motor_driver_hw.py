@@ -249,6 +249,28 @@ class MotorDriverHW:
         target_speed_left = min(1.0, max(0.0, self.pwm_a / 255.0))
         target_speed_right = min(1.0, max(0.0, self.pwm_b / 255.0))
 
+        # Back-EMF Reversal Protection:
+        # If commanded direction flips (e.g. REV -> FWD or FWD -> REV) while motors are moving,
+        # instant H-bridge reversal causes back-EMF additive voltage (3-4A surge), triggering
+        # battery voltage collapse and Raspberry Pi WiFi brownout.
+        # Enforce zero-crossing dead-time and reset slew ramp from 0.0.
+        if self._applied_dir_a is not None and self.dir_a != self._applied_dir_a:
+            if self.dir_a != MotorDirection.BRAKE and self._applied_dir_a != MotorDirection.BRAKE:
+                self._current_speed_left = 0.0
+                self._left_ena.value = 0.0
+                self._left_in1.off()
+                self._left_in2.off()
+
+        if self._applied_dir_b is not None and self.dir_b != self._applied_dir_b:
+            if self.dir_b != MotorDirection.BRAKE and self._applied_dir_b != MotorDirection.BRAKE:
+                self._current_speed_right = 0.0
+                self._right_enb.value = 0.0
+                self._right_in3.off()
+                self._right_in4.off()
+
+        self._applied_dir_a = self.dir_a
+        self._applied_dir_b = self.dir_b
+
         # Soft-start acceleration slew-rate limiter:
         # Ramp up motor speed rapidly (max +0.20 per tick, ~100ms from 0 to full speed)
         # to ensure snappy, responsive driving while eliminating the instant inrush current spike.

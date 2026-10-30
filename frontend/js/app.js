@@ -618,13 +618,18 @@
         stopDashboardDrive();
         return;
       }
-      ensureManualMode().catch(() => {});
+      try {
+        await ensureManualMode();
+      } catch (err) {
+        toast('bad', 'Manual mode failed', err.message || String(err));
+        return;
+      }
       if (dashboardDriveTimer) clearInterval(dashboardDriveTimer);
       dashboardDriveDirection = dir;
       sendDashboardDrive(dashboardDriveDirection);
       dashboardDriveTimer = setInterval(() => {
         if (dashboardDriveDirection) sendDashboardDrive(dashboardDriveDirection);
-      }, 2500);
+      }, 500);
     }
 
     $$('[data-drive]').forEach(btn => {
