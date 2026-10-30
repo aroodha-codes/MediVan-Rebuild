@@ -358,18 +358,6 @@ def main() -> None:
 
         print("[main] HARDWARE_MODE=True. Loading physical RPi drivers...")
 
-        # Ensure Raspberry Pi WiFi power-saving mode is OFF to prevent SSH & dashboard drops
-        try:
-            import subprocess
-            res = subprocess.run(
-                ["sudo", "-n", "iw", "dev", "wlan0", "set", "power_save", "off"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-            )
-            if res.returncode == 0:
-                print("[Hardware] WiFi power management: power_save OFF on wlan0.")
-        except Exception:
-            pass
-
         from hardware.motor_driver_hw import MotorDriverHW
 
         from hardware.camera_hw import CameraHW
