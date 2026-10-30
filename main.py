@@ -300,7 +300,8 @@ def main() -> None:
 
         os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-
+    if HARDWARE_MODE or not os.environ.get("SDL_AUDIODRIVER"):
+        os.environ["SDL_AUDIODRIVER"] = "dummy"
 
     pygame.init()
 
@@ -358,7 +359,10 @@ def main() -> None:
 
         print("[main] HARDWARE_MODE=True. Loading physical RPi drivers...")
 
-        from hardware.motor_driver_hw import MotorDriverHW
+        try:
+            from hardware.motor_driver_hw import MotorDriverHW
+        except ImportError:
+            from hardware import MotorDriverHW
 
         from hardware.camera_hw import CameraHW
 

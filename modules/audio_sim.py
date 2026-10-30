@@ -16,6 +16,8 @@ import time
 from enum import Enum
 from typing import Dict, Optional
 
+from config import HARDWARE_MODE
+
 if __name__ == "__main__":
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -74,13 +76,15 @@ class AudioSim:
         self._initialized: bool = False
         self._current_event: Optional[AudioEvent] = None
 
-        if _AUDIO_AVAILABLE:
+        if _AUDIO_AVAILABLE and not HARDWARE_MODE:
             try:
                 if not pygame.mixer.get_init():
                     pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
                 self._initialized = True
             except Exception:
                 self._initialized = False
+        else:
+            self._initialized = False
 
     def play(self, event: AudioEvent) -> None:
         """Play the tone for the given event if cooldown has elapsed."""
@@ -95,7 +99,7 @@ class AudioSim:
         self._current_event = event
         freq, dur_ms, repeats = _TONE_DEFS[event]
 
-        if self._initialized and _AUDIO_AVAILABLE:
+        if self._initialized and _AUDIO_AVAILABLE and not HARDWARE_MODE:
             try:
                 self._play_tone(freq, dur_ms, repeats)
             except Exception:
